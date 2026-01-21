@@ -1,0 +1,157 @@
+"""
+加密工具类
+使用 Fernet (对称加密) 加密敏感数据
+基于 AES-128 CBC 模式,简单安全且性能良好
+"""
+import os
+import base64
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC  # 修复导入
+from cryptography.hazmat.backends import default_backend
+
+
+from config import settings
+
+class EncryptionManager:
+    """
+    加密管理器
+    
+    使用 config.settings.ENCRYPTION_KEY 作为主密钥
+    如果未设置,将使用默认密钥 (仅用于开发,生产环境必须设置)
+    """
+    
+    def __init__(self):
+        """初始化加密管理器"""
+        # 从配置获取加密密钥
+        encryption_key = settings.ENCRYPTION_KEY
+        
+        if not encryption_key:
+            # 开发环境默认密钥 (生产环境必须设置环境变量)
+            encryption_key = "default-encryption-key-change-this-in-production"
+            print("WARNING: Using default encryption key, please set ENCRYPTION_KEY environment variable in production!")
+        
+        # 使用 PBKDF2HMAC 从密钥派生 Fernet 密钥
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=b'chatbi-salt',  # 固定salt (可以改为从环境变量读取)
+            iterations=100000,
+            backend=default_backend()
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(encryption_key.encode()))
+        
+        self.cipher = Fernet(key)
+    
+    def encrypt(self, plaintext: str) -> bytes:
+        """
+        加密明文字符串
+        
+        Args:
+            plaintext: 明文字符串
+            
+        Returns:
+            加密后的字节数据
+        """
+        if not plaintext:
+            raise ValueError("明文不能为空")
+        
+        return self.cipher.encrypt(plaintext.encode('utf-8'))
+    
+    def decrypt(self, ciphertext: bytes) -> str:
+        """
+        解密密文
+        
+        Args:
+            ciphertext: 加密后的字节数据
+            
+        Returns:
+            解密后的明文字符串
+        """
+        if not ciphertext:
+            raise ValueError("密文不能为空")
+        
+        try:
+            decrypted = self.cipher.decrypt(ciphertext)
+            return decrypted.decode('utf-8')
+        except Exception as e:
+            raise ValueError(f"解密失败: {str(e)}")
+
+
+# 创建全局加密管理器实例
+encryption_manager = EncryptionManager()
+
+
+def encrypt_password(password: str) -> bytes:
+    """
+    加密数据库密码
+    
+    Args:
+        password: 明文密码
+        
+    Returns:
+        加密后的密码 (bytes)
+    """
+    return encryption_manager.encrypt(password)
+
+
+def decrypt_password(encrypted_password: bytes) -> str:
+    """
+    解密数据库密码
+    
+    Args:
+        encrypted_password: 加密后的密码
+        
+    Returns:
+        明文密码
+    """
+    return encryption_manager.decrypt(encrypted_password)
+
+
+def encrypt_api_key(api_key: str) -> bytes:
+    """
+    加密 API 密钥
+    
+    Args:
+        api_key: 明文 API 密钥
+        
+    Returns:
+        加密后的 API 密钥 (bytes)
+    """
+    return encryption_manager.encrypt(api_key)
+
+
+def decrypt_api_key(encrypted_api_key: bytes) -> str:
+    """
+    解密 API 密钥
+    
+    Args:
+        encrypted_api_key: 加密后的 API 密钥
+        
+    Returns:
+        明文 API 密钥
+    """
+    return encryption_manager.decrypt(encrypted_api_key)
+
+
+# 测试函数
+if __name__ == "__main__":
+    # 测试加密/解密
+    test_password = "my_secure_password_123"
+    
+    print("🔐 测试加密功能...\n")
+    
+    # 加密
+    encrypted = encrypt_password(test_password)
+    print(f"原始密码: {test_password}")
+    print(f"加密后 (bytes): {encrypted[:50]}... (长度: {len(encrypted)})")
+    
+    # 解密
+    decrypted = decrypt_password(encrypted)
+    print(f"解密后: {decrypted}")
+    
+    # 验证
+    if decrypted == test_password:
+        print("\n✅ 加密/解密测试通过!")
+    else:
+        print("\n❌ 加密/解密测试失败!")
