@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CORS 测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .result {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <h1>ChatBI CORS 测试工具</h1>
+    
+    <div class="test-section">
+        <h2>1. 测试健康检查</h2>
+        <button onclick="testHealth()">测试 /health</button>
+        <div id="health-result" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>2. 测试登录 API</h2>
+        <button onclick="testLogin()">测试登录</button>
+        <div id="login-result" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>3. 测试根路径</h2>
+        <button onclick="testRoot()">测试 /</button>
+        <div id="root-result" class="result"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        
+        function showResult(elementId, data, isError = false) {
+            const element = document.getElementById(elementId);
+            element.textContent = JSON.stringify(data, null, 2);
+            element.className = 'result ' + (isError ? 'error' : 'success');
+        }
+        
+        async function testHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                showResult('health-result', {
+                    status: response.status,
+                    headers: Object.fromEntries(response.headers.entries()),
+                    data: data
+                });
+            } catch (error) {
+                showResult('health-result', {
+                    error: error.message,
+                    type: error.name
+                }, true);
+            }
+        }
+        
+        async function testLogin() {
+            try {
+                const response = await fetch(`${API_BASE}/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: 'admin',
+                        password: 'admin123'
+                    })
+                });
+                
+                const data = await response.json();
+                showResult('login-result', {
+                    status: response.status,
+                    headers: Object.fromEntries(response.headers.entries()),
+                    data: data
+                });
+            } catch (error) {
+                showResult('login-result', {
+                    error: error.message,
+                    type: error.name
+                }, true);
+            }
+        }
+        
+        async function testRoot() {
+            try {
+                const response = await fetch(`${API_BASE}/`);
+                const data = await response.json();
+                showResult('root-result', {
+                    status: response.status,
+                    headers: Object.fromEntries(response.headers.entries()),
+                    data: data
+                });
+            } catch (error) {
+                showResult('root-result', {
+                    error: error.message,
+                    type: error.name
+                }, true);
+            }
+        }
+    </script>
+</body>
+</html>

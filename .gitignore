@@ -164,6 +164,9 @@ install_conflict*.txt
 secrets/
 credentials/
 
+# API configuration files with sensitive data
+frontend/lib/api-services.ts
+
 # === Cache ===
 .cache/
 *.cache

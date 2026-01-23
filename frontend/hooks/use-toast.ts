@@ -16,7 +16,7 @@ type ToasterToast = ToastProps & {
 }
 
 const TOAST_LIMIT = 3
-const TOAST_REMOVE_DELAY = 5000
+const TOAST_REMOVE_DELAY = 1000 // 从dismiss到真正移除的延迟
 
 type ActionType =
     | {
@@ -42,7 +42,7 @@ interface State {
 
 const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 
-const addToRemoveQueue = (toastId: string) => {
+const addToRemoveQueue = (toastId: string, duration: number = TOAST_REMOVE_DELAY) => {
     if (toastTimeouts.has(toastId)) {
         return
     }
@@ -53,7 +53,7 @@ const addToRemoveQueue = (toastId: string) => {
             type: "REMOVE_TOAST",
             toastId: toastId,
         })
-    }, TOAST_REMOVE_DELAY)
+    }, duration)
 
     toastTimeouts.set(toastId, timeout)
 }
@@ -123,7 +123,7 @@ function dispatch(action: ActionType) {
 
 interface Toast extends Omit<ToasterToast, "id"> { }
 
-function toast({ ...props }: Toast) {
+function toast({ duration = 3000, ...props }: Toast) {
     const id = Math.random().toString(36).substring(2, 9)
 
     const update = (props: ToasterToast) =>
@@ -137,9 +137,17 @@ function toast({ ...props }: Toast) {
         type: "ADD_TOAST",
         toast: {
             ...props,
+            duration,
             id,
         },
     })
+
+    // 自动关闭计时器
+    if (duration && duration > 0) {
+        setTimeout(() => {
+            dismiss()
+        }, duration)
+    }
 
     return {
         id: id,

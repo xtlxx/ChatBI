@@ -1,231 +1,246 @@
-"""
-数据库连接管理路由
-提供数据库连接的 CRUD 操作
-"""
-from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Depends
+# routes/connections.py
+import logging
+from typing import List, Annotated, Optional
+from fastapi import APIRouter, HTTPException, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
-# 确保这些模型在你的项目中存在
+# 确保你的项目中有这些模块
+from core.database import get_db
 from models.db_connection import DbConnection, DbType
 from utils.jwt_auth import get_current_user_id
-from logging_config import get_logger
 
-# 初始化日志和路由
-logger = get_logger(__name__)
+# 配置日志
+logger = logging.getLogger(__name__)
+
 router = APIRouter(
     prefix="/connections",
     tags=["Connections"]
 )
 
-# === Pydantic 模型 (必须放在路由函数之前) ===
+# === 依赖注入定义 ===
+DbSession = Annotated[AsyncSession, Depends(get_db)]
+CurrentUserId = Annotated[int, Depends(get_current_user_id)]
 
-class DbConnectionForm(BaseModel):
-    """数据库连接表单"""
-    name: str
-    type: str  # mysql, postgresql, mssql
-    host: str
-    port: int
+
+# === Pydantic 模型 (Schema) ===
+
+class DbConnectionBase(BaseModel):
+    """基础字段模型"""
+    name: str = Field(..., min_length=1, max_length=100)
+    type: DbType  # Pydantic 会自动验证枚举值
+    host: str = Field(..., min_length=1)
+    port: int = Field(..., gt=0, lt=65536)
     username: str
-    password: str
     database_name: str
 
 
-class DbConnectionResponse(BaseModel):
-    """数据库连接响应 (不包含密码)"""
+class DbConnectionCreate(DbConnectionBase):
+    """创建请求 (包含密码)"""
+    password: str = Field(..., min_length=1)
+
+
+class DbConnectionUpdate(BaseModel):
+    """更新请求 (所有字段可选)"""
+    name: Optional[str] = None
+    type: Optional[DbType] = None
+    host: Optional[str] = None
+    port: Optional[int] = Field(None, gt=0, lt=65536)
+    username: Optional[str] = None
+    password: Optional[str] = None
+    database_name: Optional[str] = None
+
+
+class DbConnectionResponse(DbConnectionBase):
+    """响应模型 (不包含密码)"""
     id: int
-    name: str
-    type: str
-    host: str
-    port: int
-    username: str
-    database_name: str
+    # created_at: Optional[datetime] # 如果需要在前端显示创建时间可取消注释
+
+    # Pydantic V2 配置: 允许从 ORM 对象读取数据
+    model_config = ConfigDict(from_attributes=True)
+
+class DbConnectionEditResponse(DbConnectionBase):
+    """编辑时响应模型 (包含密码)"""
+    id: int
+    password: str  # 编辑时返回密码
+
+    # Pydantic V2 配置: 允许从 ORM 对象读取数据
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ConnectionTestResponse(BaseModel):
-    """连接测试响应"""
+    """测试结果响应"""
     success: bool
     message: str
-
-
-# === 数据库依赖 ===
-
-async def get_db():
-    """
-    获取数据库会话
-    注意：这里使用了延迟导入 app 以避免循环引用
-    """
-    from sqlalchemy.orm import sessionmaker
-    
-    # 延迟导入 app，防止循环导入错误
-    import app
-    
-    if not app.db_engine:
-        raise HTTPException(
-            status_code=503,
-            detail="数据库引擎尚未初始化,请稍后再试"
-        )
-    
-    # 创建会话工厂
-    async_session = sessionmaker(
-        app.db_engine,
-        class_=AsyncSession,
-        expire_on_commit=False
-    )
-    
-    async with async_session() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
 
 
 # === API 端点 ===
 
 @router.get("", response_model=List[DbConnectionResponse])
 async def get_all_connections(
-    current_user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db)
+        user_id: CurrentUserId,
+        db: DbSession
 ):
     """获取当前用户的所有数据库连接"""
-    result = await db.execute(
-        select(DbConnection).where(DbConnection.user_id == current_user_id)
-    )
-    connections = result.scalars().all()
-    
-    return [
-        DbConnectionResponse(**conn.to_dict(include_password=False))
-        for conn in connections
-    ]
+    stmt = select(DbConnection).where(DbConnection.user_id == user_id)
+    result = await db.execute(stmt)
+    # 直接返回 ORM 对象列表，Pydantic 会自动序列化
+    return result.scalars().all()
 
 
 @router.get("/{connection_id}", response_model=DbConnectionResponse)
 async def get_connection(
-    connection_id: int,
-    current_user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db)
+        connection_id: int,
+        user_id: CurrentUserId,
+        db: DbSession
 ):
     """获取指定数据库连接"""
+    # 使用 await db.get 更高效
     connection = await db.get(DbConnection, connection_id)
-    
-    if not connection or connection.user_id != current_user_id:
-        raise HTTPException(status_code=404, detail="数据库连接不存在")
-    
-    return DbConnectionResponse(**connection.to_dict(include_password=False))
+
+    if not connection or connection.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="数据库连接不存在"
+        )
+
+    return connection
+
+@router.get("/{connection_id}/edit", response_model=DbConnectionEditResponse)
+async def get_connection_for_edit(
+        connection_id: int,
+        user_id: CurrentUserId,
+        db: DbSession
+):
+    """获取指定数据库连接用于编辑 (包含密码)"""
+    connection = await db.get(DbConnection, connection_id)
+
+    if not connection or connection.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="数据库连接不存在"
+        )
+
+    return connection
 
 
-@router.post("", response_model=DbConnectionResponse, status_code=201)
+@router.post("", response_model=DbConnectionResponse, status_code=status.HTTP_201_CREATED)
 async def create_connection(
-    data: DbConnectionForm,
-    current_user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db)
+        data: DbConnectionCreate,
+        user_id: CurrentUserId,
+        db: DbSession
 ):
     """创建新的数据库连接"""
-    logger.info(f"Creating connection: name={data.name}, type={data.type}, user_id={current_user_id}")
-    
-    # 清理和规范化数据
-    normalized_type = data.type.lower().strip()
-    
-    try:
-        enum_type = DbType(normalized_type)
-    except ValueError:
-        logger.warning(f"Invalid DbType: {normalized_type}, using 'other'")
-        enum_type = DbType.other
+    logger.info(f"User {user_id} creating connection: {data.name}")
 
-    new_connection = DbConnection(
-        user_id=current_user_id,
-        name=data.name,
-        type=enum_type,
-        host=data.host,
-        port=data.port,
-        username=data.username,
-        database_name=data.database_name
-    )
-    
-    # 设置密码（加密）
-    new_connection.set_password(data.password)
-    
+    # 排除 password 字段，因为我们要通过 setter 方法处理加密
+    conn_data = data.model_dump(exclude={"password"})
+
+    new_connection = DbConnection(**conn_data, user_id=user_id)
+
+    # 利用 model 中的 property setter 自动加密
+    new_connection.password = data.password
+
     db.add(new_connection)
-    await db.commit()
-    await db.refresh(new_connection)
-    
-    return DbConnectionResponse(**new_connection.to_dict(include_password=False))
+    try:
+        await db.commit()
+        await db.refresh(new_connection)
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Create connection failed: {e}")
+        raise HTTPException(status_code=500, detail="创建连接失败")
+
+    return new_connection
 
 
 @router.put("/{connection_id}", response_model=DbConnectionResponse)
 async def update_connection(
-    connection_id: int,
-    data: DbConnectionForm,
-    current_user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db)
+        connection_id: int,
+        data: DbConnectionUpdate,
+        user_id: CurrentUserId,
+        db: DbSession
 ):
     """更新数据库连接"""
     connection = await db.get(DbConnection, connection_id)
-    
-    if not connection or connection.user_id != current_user_id:
+
+    if not connection or connection.user_id != user_id:
         raise HTTPException(status_code=404, detail="数据库连接不存在")
-    
-    # 更新字段
-    connection.name = data.name
-    
+
+    # 只更新传入的字段 (partial update)
+    update_data = data.model_dump(exclude_unset=True)
+
+    for field, value in update_data.items():
+        if field == "password":
+            connection.password = value  # 自动加密
+        else:
+            setattr(connection, field, value)
+
     try:
-        connection.type = DbType(data.type.lower().strip())
-    except ValueError:
-        connection.type = DbType.other
+        await db.commit()
+        await db.refresh(connection)
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Update connection failed: {e}")
+        raise HTTPException(status_code=500, detail="更新失败")
 
-    connection.host = data.host
-    connection.port = data.port
-    connection.username = data.username
-    connection.database_name = data.database_name
-    
-    if data.password:
-        connection.set_password(data.password)
-    
-    await db.commit()
-    await db.refresh(connection)
-    
-    return DbConnectionResponse(**connection.to_dict(include_password=False))
+    return connection
 
 
-@router.delete("/{connection_id}")
+@router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_connection(
-    connection_id: int,
-    current_user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db)
+        connection_id: int,
+        user_id: CurrentUserId,
+        db: DbSession
 ):
-    """删除数据库连接"""
+    """
+    删除数据库连接
+    返回 204 No Content
+    """
     connection = await db.get(DbConnection, connection_id)
-    
-    if not connection or connection.user_id != current_user_id:
+
+    if not connection or connection.user_id != user_id:
+        # 为了安全，这里也可以返回 404，不暴露资源是否存在
         raise HTTPException(status_code=404, detail="数据库连接不存在")
-    
+
     await db.delete(connection)
     await db.commit()
-    
-    return {"message": "数据库连接已删除"}
+    return None
 
 
 @router.post("/test", response_model=ConnectionTestResponse)
-async def test_connection(data: DbConnectionForm):
-    """测试数据库连接"""
+async def test_connection(data: DbConnectionCreate):
+    """
+    测试数据库连接 (不需要保存到数据库)
+    使用异步驱动防止阻塞 Event Loop
+    """
+    # 注意：这里接收 DbConnectionCreate 是为了获取明文密码进行测试
     try:
-        if data.type == "mysql":
-            import aiomysql
+        if data.type == DbType.mysql:
+            try:
+                import aiomysql
+            except ImportError:
+                return ConnectionTestResponse(success=False, message="服务器未安装 aiomysql 驱动")
+
+            # 尝试连接 MySQL
             conn = await aiomysql.connect(
                 host=data.host,
                 port=data.port,
                 user=data.username,
                 password=data.password,
                 db=data.database_name,
-                connect_timeout=5
+                connect_timeout=5  # 设置超时防止挂起
             )
             conn.close()
             return ConnectionTestResponse(success=True, message="MySQL 连接成功")
-        
-        elif data.type == "postgresql":
-            import asyncpg
+
+        elif data.type == DbType.postgresql:
+            try:
+                import asyncpg
+            except ImportError:
+                return ConnectionTestResponse(success=False, message="服务器未安装 asyncpg 驱动")
+
+            # 尝试连接 PostgreSQL
             conn = await asyncpg.connect(
                 host=data.host,
                 port=data.port,
@@ -236,15 +251,16 @@ async def test_connection(data: DbConnectionForm):
             )
             await conn.close()
             return ConnectionTestResponse(success=True, message="PostgreSQL 连接成功")
-        
+
         else:
             return ConnectionTestResponse(
                 success=False,
-                message=f"暂不支持测试该类型的数据库: {data.type}"
+                message=f"暂不支持自动测试该类型的数据库: {data.type.value}"
             )
-    
+
     except Exception as e:
-        logger.error(f"Connection test failed: {str(e)}")
+        logger.warning(f"Connection test failed: {str(e)}")
+        # 返回失败而不是抛出 500 异常，因为这是预期的业务逻辑
         return ConnectionTestResponse(
             success=False,
             message=f"连接失败: {str(e)}"

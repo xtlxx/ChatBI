@@ -1,8 +1,10 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, TestTube, Database, Bot, ArrowLeft } from 'lucide-react';
+import { Plus, Edit, Trash2, Zap, Eye, EyeOff, Database, Bot, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,37 +13,74 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { useConnections, useLlmConfigs, useAppStore } from '@/store/useAppStore';
 import { dbConnectionApi, llmConfigApi } from '@/lib/api-services';
-import { DbConnectionForm, LlmConfigForm } from '@/types';
 import { toast } from '@/hooks/use-toast';
+import { api } from '@/lib/api';
+import { dbConnectionSchema, llmConfigSchema, type DbConnectionFormData, type LlmConfigFormData } from '@/lib/schemas';
 
 const SettingsPage: React.FC = () => {
   const connections = useConnections();
   const llmConfigs = useLlmConfigs();
   const { setConnections, setLlmConfigs, addConnection, addLlmConfig, removeConnection, removeLlmConfig } = useAppStore();
 
+  // Provider显示名称映射
+  const getProviderDisplayName = (provider: string) => {
+    const providerMap: { [key: string]: string } = {
+      'openai': 'OpenAI',
+      'qwen': 'Qwen',
+      'deepseek': 'DeepSeek',
+      'anthropic': 'Anthropic (Claude)',
+      'moonshot': 'Moonshot',
+      'ollama': 'Ollama (本地)',
+      'gemini': 'Google Gemini',
+      'other': '其他'
+    };
+    return providerMap[provider] || provider;
+  };
+
+  // 临时API方法
+  const getConnectionForEdit = async (id: number): Promise<any> => {
+    const response = await api.get(`/connections/${id}/edit`);
+    return response.data || response;
+  };
+
+  const getLlmConfigForEdit = async (id: number): Promise<any> => {
+    const response = await api.get(`/llm-configs/${id}/edit`);
+    return response.data || response;
+  };
+
   const [dbDialogOpen, setDbDialogOpen] = useState(false);
   const [llmDialogOpen, setLlmDialogOpen] = useState(false);
-  const [editingDb, setEditingDb] = useState<(DbConnectionForm & { id?: number }) | null>(null);
-  const [editingLlm, setEditingLlm] = useState<(LlmConfigForm & { id?: number }) | null>(null);
+  const [editingDbId, setEditingDbId] = useState<number | null>(null);
+  const [editingLlmId, setEditingLlmId] = useState<number | null>(null);
   const [testingConnection, setTestingConnection] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [showDbPassword, setShowDbPassword] = useState(false);
 
-  // Database connection form state
-  const [dbForm, setDbForm] = useState<DbConnectionForm>({
-    name: '',
-    type: 'mysql',
-    host: '',
-    port: 3306,
-    username: '',
-    password: '',
-    database_name: '',
+  // Database connection form with react-hook-form
+  const dbForm = useForm<DbConnectionFormData>({
+    resolver: zodResolver(dbConnectionSchema),
+    mode: 'onChange',  // 实时验证
+    defaultValues: {
+      name: '',
+      type: 'mysql',
+      host: '',
+      port: 3306,
+      username: '',
+      password: '',
+      database_name: ''
+    }
   });
 
-  // LLM configuration form state
-  const [llmForm, setLlmForm] = useState<LlmConfigForm>({
-    provider: 'openai',
-    model_name: '',
-    api_key: '',
-    base_url: '',
+  // LLM configuration form with react-hook-form
+  const llmForm = useForm<LlmConfigFormData>({
+    resolver: zodResolver(llmConfigSchema),
+    mode: 'onChange',  // 实时验证
+    defaultValues: {
+      provider: 'openai',
+      model_name: '',
+      api_key: '',
+      base_url: '',
+    }
   });
 
   useEffect(() => {
@@ -68,7 +107,7 @@ const SettingsPage: React.FC = () => {
   };
 
   const resetDbForm = () => {
-    setDbForm({
+    dbForm.reset({
       name: '',
       type: 'mysql',
       host: '',
@@ -77,34 +116,50 @@ const SettingsPage: React.FC = () => {
       password: '',
       database_name: '',
     });
-    setEditingDb(null);
+    setEditingDbId(null);
+    setShowDbPassword(false);
   };
 
   const resetLlmForm = () => {
-    setLlmForm({
+    llmForm.reset({
       provider: 'openai',
       model_name: '',
       api_key: '',
       base_url: '',
     });
-    setEditingLlm(null);
+    setEditingLlmId(null);
+    setShowApiKey(false);
   };
 
   const handleTestDbConnection = async () => {
+    const isValid = await dbForm.trigger();
+    if (!isValid) {
+      toast({
+        title: '⚠️ 验证失败',
+        description: '请检查表单错误并修正',
+        variant: 'error',
+        duration: 3000,
+      });
+      return;
+    }
+
     setTestingConnection(true);
     try {
-      const result = await dbConnectionApi.testConnection(dbForm);
+      const formData = dbForm.getValues();
+      const result = await dbConnectionApi.testConnection(formData);
       if (result.success) {
         toast({
           title: '✅ 连接测试成功',
           description: result.message,
           variant: 'success',
+          duration: 3000,
         });
       } else {
         toast({
           title: '❌ 连接测试失败',
           description: result.message,
           variant: 'error',
+          duration: 5000,
         });
       }
     } catch (error: any) {
@@ -112,6 +167,7 @@ const SettingsPage: React.FC = () => {
         title: '❌ 连接测试失败',
         description: error.response?.data?.detail || error.message || '未知错误',
         variant: 'error',
+        duration: 5000,
       });
     } finally {
       setTestingConnection(false);
@@ -119,52 +175,69 @@ const SettingsPage: React.FC = () => {
   };
 
   const handleTestLlmConnection = async () => {
+    const isValid = await llmForm.trigger();
+    if (!isValid) {
+      toast({
+        title: '⚠️ 验证失败',
+        description: '请检查表单错误并修正',
+        variant: 'error',
+        duration: 3000,
+      });
+      return;
+    }
+
     setTestingConnection(true);
     try {
-      const result = await llmConfigApi.testConnection(llmForm);
+      const formData = llmForm.getValues();
+      const result = await llmConfigApi.testConnection(formData);
       if (result.success) {
         toast({
           title: '✅ LLM 配置测试成功',
           description: result.message,
           variant: 'success',
+          duration: 3000,
         });
       } else {
         toast({
           title: '❌ LLM 测试失败',
           description: result.message,
           variant: 'error',
+          duration: 5000,
         });
       }
     } catch (error: any) {
       toast({
         title: '❌ LLM 测试失败',
-        description: error.response?.data?.detail || error.message || '未知错误',
+        description: error.message || '网络连接失败，请检查配置',
         variant: 'error',
+        duration: 5000,
       });
     } finally {
       setTestingConnection(false);
     }
   };
 
-  const handleSaveDbConnection = async () => {
+  const onSubmitDbConnection = async (data: DbConnectionFormData) => {
     try {
-      if (editingDb) {
+      if (editingDbId) {
         // Update existing connection
-        const updated = await dbConnectionApi.update(editingDb.id as number, dbForm);
+        const updated = await dbConnectionApi.update(editingDbId, data);
         setConnections(connections.map(conn => conn.id === updated.id ? updated : conn));
         toast({
           title: '✅ 更新成功',
           description: '数据库连接已更新',
           variant: 'success',
+          duration: 3000,
         });
       } else {
         // Create new connection
-        const created = await dbConnectionApi.create(dbForm);
+        const created = await dbConnectionApi.create(data);
         addConnection(created);
         toast({
           title: '✅ 保存成功',
           description: '数据库连接已创建',
           variant: 'success',
+          duration: 3000,
         });
       }
       setDbDialogOpen(false);
@@ -174,29 +247,32 @@ const SettingsPage: React.FC = () => {
         title: '❌ 保存失败',
         description: error.response?.data?.detail || error.message || '保存数据库连接失败',
         variant: 'error',
+        duration: 5000,
       });
     }
   };
 
-  const handleSaveLlmConfig = async () => {
+  const onSubmitLlmConfig = async (data: LlmConfigFormData) => {
     try {
-      if (editingLlm) {
+      if (editingLlmId) {
         // Update existing config
-        const updated = await llmConfigApi.update(editingLlm.id as number, llmForm);
+        const updated = await llmConfigApi.update(editingLlmId, data);
         setLlmConfigs(llmConfigs.map(config => config.id === updated.id ? updated : config));
         toast({
           title: '✅ 更新成功',
           description: 'LLM 配置已更新',
           variant: 'success',
+          duration: 3000,
         });
       } else {
         // Create new config
-        const created = await llmConfigApi.create(llmForm);
+        const created = await llmConfigApi.create(data);
         addLlmConfig(created);
         toast({
           title: '✅ 保存成功',
           description: 'LLM 配置已创建',
           variant: 'success',
+          duration: 3000,
         });
       }
       setLlmDialogOpen(false);
@@ -206,33 +282,58 @@ const SettingsPage: React.FC = () => {
         title: '❌ 保存失败',
         description: error.response?.data?.detail || error.message || '保存 LLM 配置失败',
         variant: 'error',
+        duration: 5000,
       });
     }
   };
 
-  const handleEditDb = (connection: any) => {
-    setDbForm({
-      name: connection.name,
-      type: connection.type,
-      host: connection.host,
-      port: connection.port,
-      username: connection.username,
-      password: '', // Don't populate password for security
-      database_name: connection.database_name,
-    });
-    setEditingDb(connection);
-    setDbDialogOpen(true);
+  const handleEditDb = async (connection: any) => {
+    try {
+      // 获取包含密码的完整配置
+      const fullConnection = await getConnectionForEdit(connection.id);
+      dbForm.reset({
+        name: fullConnection.name,
+        type: fullConnection.type,
+        host: fullConnection.host,
+        port: fullConnection.port,
+        username: fullConnection.username,
+        password: fullConnection.password,
+        database_name: fullConnection.database_name,
+      });
+      setEditingDbId(connection.id);
+      setDbDialogOpen(true);
+      setShowDbPassword(false);
+    } catch (error) {
+      toast({
+        title: '❌ 获取配置失败',
+        description: '无法获取数据库连接配置，请重试',
+        variant: 'error',
+        duration: 5000,
+      });
+    }
   };
 
-  const handleEditLlm = (config: any) => {
-    setLlmForm({
-      provider: config.provider,
-      model_name: config.model_name,
-      api_key: '', // Don't populate API key for security
-      base_url: config.base_url || '',
-    });
-    setEditingLlm(config);
-    setLlmDialogOpen(true);
+  const handleEditLlm = async (config: any) => {
+    try {
+      // 获取包含API密钥的完整配置
+      const fullConfig = await getLlmConfigForEdit(config.id);
+      llmForm.reset({
+        provider: fullConfig.provider,
+        model_name: fullConfig.model_name,
+        api_key: fullConfig.api_key,
+        base_url: fullConfig.base_url || '',
+      });
+      setEditingLlmId(config.id);
+      setLlmDialogOpen(true);
+      setShowApiKey(false);
+    } catch (error) {
+      toast({
+        title: '❌ 获取配置失败',
+        description: '无法获取LLM配置，请重试',
+        variant: 'error',
+        duration: 5000,
+      });
+    }
   };
 
   const handleDeleteDb = async (id: number) => {
@@ -244,12 +345,14 @@ const SettingsPage: React.FC = () => {
           title: '✅ 删除成功',
           description: '数据库连接已删除',
           variant: 'success',
+          duration: 3000,
         });
       } catch (error: any) {
         toast({
           title: '❌ 删除失败',
           description: error.response?.data?.detail || error.message || '删除数据库连接失败',
           variant: 'error',
+          duration: 5000,
         });
       }
     }
@@ -264,12 +367,14 @@ const SettingsPage: React.FC = () => {
           title: '✅ 删除成功',
           description: 'LLM 配置已删除',
           variant: 'success',
+          duration: 3000,
         });
       } catch (error: any) {
         toast({
           title: '❌ 删除失败',
           description: error.response?.data?.detail || error.message || '删除 LLM 配置失败',
           variant: 'error',
+          duration: 5000,
         });
       }
     }
@@ -311,114 +416,158 @@ const SettingsPage: React.FC = () => {
                   添加连接
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-[425px]">
+              <DialogContent
+                className="sm:max-w-[425px]"
+                onInteractOutside={(e) => e.preventDefault()}
+                onEscapeKeyDown={(e) => e.preventDefault()}
+              >
                 <DialogHeader>
                   <DialogTitle>
-                    {editingDb ? '编辑数据库连接' : '添加数据库连接'}
+                    {editingDbId ? '编辑数据库连接' : '添加数据库连接'}
                   </DialogTitle>
                   <DialogDescription>
                     配置您的数据库连接。保存前请测试连接。
                   </DialogDescription>
                 </DialogHeader>
-                <div className="grid gap-4 py-4">
+                <form onSubmit={dbForm.handleSubmit(onSubmitDbConnection)} className="grid gap-4 py-4">
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="name" className="text-right">
-                      名称
+                      名称 <span className="text-red-500">*</span>
                     </Label>
-                    <Input
-                      id="name"
-                      value={dbForm.name}
-                      onChange={(e) => setDbForm({ ...dbForm, name: e.target.value })}
-                      className="col-span-3"
-                    />
+                    <div className="col-span-3">
+                      <Input
+                        id="name"
+                        {...dbForm.register('name')}
+                        className={dbForm.formState.errors.name ? 'border-red-500' : ''}
+                      />
+                      {dbForm.formState.errors.name && (
+                        <p className="text-sm text-red-500 mt-1">{dbForm.formState.errors.name.message}</p>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="type" className="text-right">
-                      类型
+                      类型 <span className="text-red-500">*</span>
                     </Label>
-                    <Select value={dbForm.type} onValueChange={(value: any) => setDbForm({ ...dbForm, type: value })}>
-                      <SelectTrigger className="col-span-3">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="mysql">MySQL</SelectItem>
-                        <SelectItem value="postgresql">PostgreSQL</SelectItem>
-                        <SelectItem value="mssql">MS SQL Server</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <div className="col-span-3">
+                      <Select
+                        value={dbForm.watch('type')}
+                        onValueChange={(value: any) => dbForm.setValue('type', value)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="mysql">MySQL</SelectItem>
+                          <SelectItem value="postgresql">PostgreSQL</SelectItem>
+                          <SelectItem value="mssql">MS SQL Server</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="host" className="text-right">
-                      主机
+                      主机 <span className="text-red-500">*</span>
                     </Label>
-                    <Input
-                      id="host"
-                      value={dbForm.host}
-                      onChange={(e) => setDbForm({ ...dbForm, host: e.target.value })}
-                      className="col-span-3"
-                    />
+                    <div className="col-span-3">
+                      <Input
+                        id="host"
+                        {...dbForm.register('host')}
+                        className={dbForm.formState.errors.host ? 'border-red-500' : ''}
+                      />
+                      {dbForm.formState.errors.host && (
+                        <p className="text-sm text-red-500 mt-1">{dbForm.formState.errors.host.message}</p>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="port" className="text-right">
-                      端口
+                      端口 <span className="text-red-500">*</span>
                     </Label>
-                    <Input
-                      id="port"
-                      type="number"
-                      value={dbForm.port}
-                      onChange={(e) => setDbForm({ ...dbForm, port: Number(e.target.value) })}
-                      className="col-span-3"
-                    />
+                    <div className="col-span-3">
+                      <Input
+                        id="port"
+                        type="number"
+                        {...dbForm.register('port', { valueAsNumber: true })}
+                        className={dbForm.formState.errors.port ? 'border-red-500' : ''}
+                      />
+                      {dbForm.formState.errors.port && (
+                        <p className="text-sm text-red-500 mt-1">{dbForm.formState.errors.port.message}</p>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="username" className="text-right">
-                      用户名
+                      用户名 <span className="text-red-500">*</span>
                     </Label>
-                    <Input
-                      id="username"
-                      value={dbForm.username}
-                      onChange={(e) => setDbForm({ ...dbForm, username: e.target.value })}
-                      className="col-span-3"
-                    />
+                    <div className="col-span-3">
+                      <Input
+                        id="username"
+                        {...dbForm.register('username')}
+                        className={dbForm.formState.errors.username ? 'border-red-500' : ''}
+                      />
+                      {dbForm.formState.errors.username && (
+                        <p className="text-sm text-red-500 mt-1">{dbForm.formState.errors.username.message}</p>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="password" className="text-right">
-                      密码
+                      密码 <span className="text-red-500">*</span>
                     </Label>
-                    <Input
-                      id="password"
-                      type="password"
-                      value={dbForm.password}
-                      onChange={(e) => setDbForm({ ...dbForm, password: e.target.value })}
-                      className="col-span-3"
-                    />
+                    <div className="col-span-3">
+                      <div className="relative">
+                        <Input
+                          id="password"
+                          type={showDbPassword ? "text" : "password"}
+                          {...dbForm.register('password')}
+                          className={`pr-10 ${dbForm.formState.errors.password ? 'border-red-500' : ''}`}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                          onClick={() => setShowDbPassword(!showDbPassword)}
+                        >
+                          {showDbPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                      {dbForm.formState.errors.password && (
+                        <p className="text-sm text-red-500 mt-1">{dbForm.formState.errors.password.message}</p>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 items-center gap-4">
-                    <Label htmlFor="database" className="text-right">
-                      数据库
+                    <Label htmlFor="database_name" className="text-right">
+                      数据库 <span className="text-red-500">*</span>
                     </Label>
-                    <Input
-                      id="database"
-                      value={dbForm.database_name}
-                      onChange={(e) => setDbForm({ ...dbForm, database_name: e.target.value })}
-                      className="col-span-3"
-                    />
+                    <div className="col-span-3">
+                      <Input
+                        id="database_name"
+                        {...dbForm.register('database_name')}
+                        className={dbForm.formState.errors.database_name ? 'border-red-500' : ''}
+                      />
+                      {dbForm.formState.errors.database_name && (
+                        <p className="text-sm text-red-500 mt-1">{dbForm.formState.errors.database_name.message}</p>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <DialogFooter>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleTestDbConnection}
-                    disabled={testingConnection}
-                  >
-                    <TestTube className="h-4 w-4 mr-2" />
-                    {testingConnection ? '测试中...' : '测试连接'}
-                  </Button>
-                  <Button type="button" onClick={handleSaveDbConnection}>
-                    保存
-                  </Button>
-                </DialogFooter>
+                  <DialogFooter>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleTestDbConnection}
+                      disabled={testingConnection}
+                    >
+                      <Zap className="h-4 w-4 mr-2" />
+                      {testingConnection ? '测试中...' : '测试连接'}
+                    </Button>
+                    <Button type="submit" disabled={!dbForm.formState.isValid}>
+                      保存
+                    </Button>
+                  </DialogFooter>
+                </form>
               </DialogContent>
             </Dialog>
           </div>
@@ -483,81 +632,118 @@ const SettingsPage: React.FC = () => {
                   添加 LLM 模型
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-[425px]">
+              <DialogContent
+                className="sm:max-w-[425px]"
+                onInteractOutside={(e) => e.preventDefault()}
+                onEscapeKeyDown={(e) => e.preventDefault()}
+              >
                 <DialogHeader>
                   <DialogTitle>
-                    {editingLlm ? '编辑 LLM 配置' : '添加 LLM 配置'}
+                    {editingLlmId ? '编辑 LLM 配置' : '添加 LLM 配置'}
                   </DialogTitle>
                   <DialogDescription>
                     配置您的 LLM 模型设置。保存前请测试连接。
                   </DialogDescription>
                 </DialogHeader>
-                <div className="grid gap-4 py-4">
+                <form onSubmit={llmForm.handleSubmit(onSubmitLlmConfig)} className="grid gap-4 py-4">
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="provider" className="text-right">
-                      提供商
+                      提供商 <span className="text-red-500">*</span>
                     </Label>
-                    <Select value={llmForm.provider} onValueChange={(value) => setLlmForm({ ...llmForm, provider: value })}>
-                      <SelectTrigger className="col-span-3">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="openai">OpenAI</SelectItem>
-                        <SelectItem value="qwen">Qwen</SelectItem>
-                        <SelectItem value="deepseek">DeepSeek</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <div className="col-span-3">
+                      <Select
+                        value={llmForm.watch('provider')}
+                        onValueChange={(value) => llmForm.setValue('provider', value as LlmConfigFormData['provider'])}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="openai">OpenAI</SelectItem>
+                          <SelectItem value="qwen">Qwen</SelectItem>
+                          <SelectItem value="deepseek">DeepSeek</SelectItem>
+                          <SelectItem value="anthropic">Anthropic(Claude)</SelectItem>
+                          <SelectItem value="moonshot">Moonshot</SelectItem>
+                          <SelectItem value="ollama">Ollama(本地)</SelectItem>
+                          <SelectItem value="gemini">Google Gemini</SelectItem>
+                          <SelectItem value="other">其他</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="model_name" className="text-right">
-                      模型名称
+                      模型名称 <span className="text-red-500">*</span>
                     </Label>
-                    <Input
-                      id="model_name"
-                      value={llmForm.model_name}
-                      onChange={(e) => setLlmForm({ ...llmForm, model_name: e.target.value })}
-                      className="col-span-3"
-                    />
+                    <div className="col-span-3">
+                      <Input
+                        id="model_name"
+                        {...llmForm.register('model_name')}
+                        className={llmForm.formState.errors.model_name ? 'border-red-500' : ''}
+                      />
+                      {llmForm.formState.errors.model_name && (
+                        <p className="text-sm text-red-500 mt-1">{llmForm.formState.errors.model_name.message}</p>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="api_key" className="text-right">
-                      API 密钥
+                      API 密钥 <span className="text-red-500">*</span>
                     </Label>
-                    <Input
-                      id="api_key"
-                      type="password"
-                      value={llmForm.api_key}
-                      onChange={(e) => setLlmForm({ ...llmForm, api_key: e.target.value })}
-                      className="col-span-3"
-                    />
+                    <div className="col-span-3">
+                      <div className="relative">
+                        <Input
+                          id="api_key"
+                          type={showApiKey ? "text" : "password"}
+                          {...llmForm.register('api_key')}
+                          className={`pr-10 ${llmForm.formState.errors.api_key ? 'border-red-500' : ''}`}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                          onClick={() => setShowApiKey(!showApiKey)}
+                        >
+                          {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                      {llmForm.formState.errors.api_key && (
+                        <p className="text-sm text-red-500 mt-1">{llmForm.formState.errors.api_key.message}</p>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 items-center gap-4">
                     <Label htmlFor="base_url" className="text-right">
                       API 代理地址
                     </Label>
-                    <Input
-                      id="base_url"
-                      value={llmForm.base_url}
-                      onChange={(e) => setLlmForm({ ...llmForm, base_url: e.target.value })}
-                      className="col-span-3"
-                      placeholder="可选: 自定义 API 端点"
-                    />
+                    <div className="col-span-3">
+                      <Input
+                        id="base_url"
+                        {...llmForm.register('base_url')}
+                        placeholder="可选: 自定义 API 端点"
+                        className={llmForm.formState.errors.base_url ? 'border-red-500' : ''}
+                      />
+                      {llmForm.formState.errors.base_url && (
+                        <p className="text-sm text-red-500 mt-1">{llmForm.formState.errors.base_url.message}</p>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <DialogFooter>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleTestLlmConnection}
-                    disabled={testingConnection}
-                  >
-                    <TestTube className="h-4 w-4 mr-2" />
-                    {testingConnection ? '测试中...' : '测试连接'}
-                  </Button>
-                  <Button type="button" onClick={handleSaveLlmConfig}>
-                    保存
-                  </Button>
-                </DialogFooter>
+                  <DialogFooter>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleTestLlmConnection}
+                      disabled={testingConnection}
+                    >
+                      <Zap className="h-4 w-4 mr-2" />
+                      {testingConnection ? '测试中...' : '测试连接'}
+                    </Button>
+                    <Button type="submit" disabled={!llmForm.formState.isValid}>
+                      保存
+                    </Button>
+                  </DialogFooter>
+                </form>
               </DialogContent>
             </Dialog>
           </div>
@@ -575,7 +761,7 @@ const SettingsPage: React.FC = () => {
               <tbody>
                 {llmConfigs.map((config) => (
                   <tr key={config.id} className="border-b">
-                    <td className="p-4">{config.provider}</td>
+                    <td className="p-4">{getProviderDisplayName(config.provider)}</td>
                     <td className="p-4">{config.model_name}</td>
                     <td className="p-4">{config.base_url || '默认'}</td>
                     <td className="p-4">

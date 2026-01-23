@@ -1,75 +1,51 @@
-"""
-用户数据模型
-使用 SQLAlchemy 定义用户表结构
-"""
-from sqlalchemy import Column, BigInteger, String, DateTime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
-from datetime import datetime
-from passlib.context import CryptContext
+# models/user.py
+from typing import List, Optional
+from sqlalchemy import String, LargeBinary
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+import bcrypt
+from .base import Base
+# 使用 TYPE_CHECKING 避免运行时循环导入，同时保留类型提示
+from typing import TYPE_CHECKING
 
-Base = declarative_base()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
+if TYPE_CHECKING:
+    from .db_connection import DbConnection
+    from .llm_config import LlmConfig
+    from .chat import ChatSession
 
 class User(Base):
-    """用户模型 (优化版)"""
     __tablename__ = "users"
-    
-    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
-    username = Column(String(50), unique=True, nullable=False, index=True)
-    email = Column(String(100), unique=True, nullable=False, index=True)
-    hashed_password = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # 关系 (如果需要)
-    # connections = relationship("DbConnection", back_populates="user")
-    # llm_configs = relationship("LlmConfig", back_populates="user")
-    
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    # 密码哈希通常存储为字符串，但在某些数据库中 bytes 更省空间，这里保持 str
+    hashed_password: Mapped[str] = mapped_column(String(255))
+
+    # 定义关系
+    connections: Mapped[List["DbConnection"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    llm_configs: Mapped[List["LlmConfig"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    chat_sessions: Mapped[List["ChatSession"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
     def verify_password(self, password: str) -> bool:
-        """
-        验证密码
-        
-        Args:
-            password: 明文密码
-            
-        Returns:
-            密码是否正确
-        """
-        return pwd_context.verify(password, self.hashed_password)
-    
+        """验证密码"""
+        if isinstance(password, str):
+            password_bytes = password.encode('utf-8')
+        else:
+            password_bytes = password
+
+        return bcrypt.checkpw(password_bytes, self.hashed_password.encode('utf-8'))
+
     @staticmethod
     def hash_password(password: str) -> str:
-        """
-        哈希密码
-        
-        Args:
-            password: 明文密码
-            
-        Returns:
-            哈希后的密码
-        """
-        return pwd_context.hash(password)
-    
-    def to_dict(self, include_sensitive: bool = False):
-        """
-        转换为字典
-        
-        Args:
-            include_sensitive: 是否包含敏感信息
-            
-        Returns:
-            用户字典
-        """
-        data = {
-            "id": self.id,
-            "username": self.username,
-            "email": self.email,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
-        
-        if include_sensitive:
-            data["hashed_password"] = self.hashed_password
-        
-        return data
+        """生成密码哈希"""
+        password_bytes = password.encode('utf-8')
+        if len(password_bytes) > 72:
+            raise ValueError("Password too long")
+
+        return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode('utf-8')

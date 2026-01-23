@@ -1,3 +1,4 @@
+#agent/state.py
 """
 LangGraph Agent 状态定义
 定义 Agent 执行过程中的状态结构
@@ -5,14 +6,13 @@ LangGraph Agent 状态定义
 from typing import TypedDict, Annotated, List, Dict, Any, Optional
 from operator import add
 from langchain_core.messages import BaseMessage
-
+from langgraph.graph.message import add_messages
 
 class AgentState(TypedDict):
     """Agent 状态定义"""
-    
-    # 消息历史 - 使用 add 操作符支持消息追加
-    messages: Annotated[List[BaseMessage], add]
-    
+    #消息历史 -使用LangGraph内置的add_messages，处理ID去重
+    messages: Annotated[List[BaseMessage], add_messages]
+
     # 用户原始查询
     query: str
     

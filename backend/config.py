@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     )
     
     # === 数据库配置 ===
+    DATABASE_URL: Optional[str] = Field(default=None, description="完整数据库连接 URL")
     DB_HOST: str = Field(description="MySQL 数据库主机地址")
     DB_PORT: int = Field(default=3306, description="MySQL 数据库端口")
     DB_USER: str = Field(description="数据库用户名")
@@ -119,6 +120,10 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         """构建数据库连接 URL"""
+        # 优先使用完整的 DATABASE_URL 环境变量
+        if self.DATABASE_URL:
+            return self.DATABASE_URL
+        # 如果没有 DATABASE_URL，则使用其他字段构建
         return f"mysql+aiomysql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
     
     @property

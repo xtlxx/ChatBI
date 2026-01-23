@@ -89,5 +89,5 @@ export interface RegisterForm {
   username: string;
   email: string;
   password: string;
-  confirm_password: string;
+  confirmPassword: string;  // 改为驼峰式,与Zod schema一致
 }

@@ -1,3 +1,4 @@
+#utils/encryption.py
 """
 加密工具类
 使用 Fernet (对称加密) 加密敏感数据
@@ -25,11 +26,13 @@ class EncryptionManager:
         """初始化加密管理器"""
         # 从配置获取加密密钥
         encryption_key = settings.ENCRYPTION_KEY
-        
-        if not encryption_key:
-            # 开发环境默认密钥 (生产环境必须设置环境变量)
-            encryption_key = "default-encryption-key-change-this-in-production"
-            print("WARNING: Using default encryption key, please set ENCRYPTION_KEY environment variable in production!")
+
+        # 强校验：生产环境禁止使用默认 Key
+        if not encryption_key or encryption_key =="default-encryption-key-change-this-in-production":
+            # 检查当前环境是否为生产环境
+            env_mode = getattr(settings, "ENV", "development")
+            if env_mode == "production":
+                raise ValueError("CRITICAL SECURITY ERROR: ENCRYPTION_KEY is not set in production!")
         
         # 使用 PBKDF2HMAC 从密钥派生 Fernet 密钥
         kdf = PBKDF2HMAC(

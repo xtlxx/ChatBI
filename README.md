@@ -289,9 +289,15 @@ DB_USER=your_username
 DB_PASSWORD=your_password
 DB_NAME=chatbi
 
-# === LLM 配置 ===
+# === LLM 配置 (Anthropic) ===
 ANTHROPIC_API_KEY=sk-ant-xxx
-ANTHROPIC_MODEL=claude-sonnet-4-20250514
+ANTHROPIC_MODEL=claude-3-sonnet-20240229
+
+# === LLM 配置 (OpenAI 兼容 - 如 Qwen/DeepSeek) ===
+# OPENAI_API_KEY=sk-xxx
+# OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# OPENAI_MODEL_NAME=qwen-turbo
+
 LLM_TEMPERATURE=0.1
 LLM_MAX_TOKENS=4096
 
@@ -300,7 +306,7 @@ VOYAGE_API_KEY=pa-xxx
 VOYAGE_MODEL=voyage-3-large
 
 # === 向量数据库 (可选) ===
-PINECONE_API_KEY=xxx
+PINECOONE_API_KEY=xxx
 PINECONE_ENVIRONMENT=us-east-1-aws
 PINECONE_INDEX_NAME=chatbi-knowledge
 
@@ -449,9 +455,23 @@ npm run build
 
 ### 2. 如何切换 LLM 模型?
 
-在设置页面添加新的 LLM 配置,或修改 `.env` 文件中的 `ANTHROPIC_MODEL` 配置。
+在设置页面添加新的 LLM 配置，支持所有兼容 OpenAI 接口的模型（如 DeepSeek, Qwen 等）。或者在 `.env` 文件中配置默认模型。
 
-### 3. 如何启用 LangSmith 追踪?
+### 3. 登录后一直重定向回登录页?
+
+这通常是由于 Cookie 设置问题导致的。请确保：
+1. 浏览器允许第三方 Cookie（如果在不同域名下开发）。
+2. 后端 `.env` 中的 `ALLOWED_ORIGINS` 包含前端地址。
+3. 系统时间准确（JWT Token 依赖时间）。
+
+### 4. 图表无法显示?
+
+系统使用智能正则匹配从 AI 回复中提取 ECharts 配置。如果图表未显示：
+1. 检查 AI 回复中是否包含 `Analysis` 或 JSON 数据。
+2. 尝试在提示词中明确要求："请生成 ECharts JSON 配置"。
+3. 确保 LLM 模型具有较强的指令遵循能力（推荐 Claude 3.5 或 GPT-4）。
+
+### 5. 如何启用 LangSmith 追踪?
 
 设置环境变量:
 ```bash
@@ -460,7 +480,7 @@ LANGCHAIN_API_KEY=your-langsmith-key
 LANGCHAIN_PROJECT=your-project-name
 ```
 
-### 4. 如何优化查询性能?
+### 6. 如何优化查询性能?
 
 - 启用 Redis 缓存
 - 配置合适的数据库连接池大小

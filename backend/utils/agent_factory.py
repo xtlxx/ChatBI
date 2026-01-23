@@ -1,6 +1,8 @@
+#utils/agent_factory.py
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, AsyncEngine
 from sqlalchemy import select
 from fastapi import HTTPException
+from urllib.parse import quote_plus
 from models.db_connection import DbConnection, DbType
 from models.llm_config import LlmConfig, LlmProvider
 from agent.graph import ChatBIAgent
@@ -41,23 +43,24 @@ async def create_agent_from_config(
         raise HTTPException(status_code=404, detail="数据库连接配置不存在或无权访问")
     
     # 构建数据库 URL
-    password = db_conn_config.get_password()
-    
-    # 根据类型构建 URL
-    # 目前支持 MySQL 和 PostgreSQL
+    password = quote_plus(db_conn_config.password)
+    username = quote_plus(db_conn_config.username)
+
     if db_conn_config.type == DbType.mysql:
         # mysql+aiomysql://user:password@host:port/dbname
-        db_url = f"mysql+aiomysql://{db_conn_config.username}:{password}@{db_conn_config.host}:{db_conn_config.port}/{db_conn_config.database_name}"
+        db_url = f"mysql+aiomysql://{username}:{password}@{db_conn_config.host}:{db_conn_config.port}/{db_conn_config.database_name}"
     elif db_conn_config.type == DbType.postgresql:
         # postgresql+asyncpg://user:password@host:port/dbname
-        db_url = f"postgresql+asyncpg://{db_conn_config.username}:{password}@{db_conn_config.host}:{db_conn_config.port}/{db_conn_config.database_name}"
+        db_url = f"postgresql+asyncpg://{username}:{password}@{db_conn_config.host}:{db_conn_config.port}/{db_conn_config.database_name}"
+    elif db_conn_config.type == DbType.mssql:
+        # mssql+aioodbc://user:password@host:port/dbname?driver=ODBC+Driver+17+for+SQL+Server
+        driver = quote_plus("ODBC Driver 17 for SQL Server")
+        db_url = f"mssql+aioodbc://{username}:{password}@{db_conn_config.host}:{db_conn_config.port}/{db_conn_config.database_name}?driver={driver}"
     else:
         # 尝试通用构建，假设是兼容的
         # 为了兼容性，如果是其他类型，可能需要更多处理
-        # 这里先只支持这两种主流库
+        # 这里先只支持这三种主流库
         raise HTTPException(status_code=400, detail=f"暂时不支持该数据库类型: {db_conn_config.type}")
-
-    # 创建临时的分析目标数据库引擎
     target_db_engine = create_async_engine(db_url, echo=False)
     
     # 2. 获取 LLM 配置
@@ -70,38 +73,36 @@ async def create_agent_from_config(
     llm_config = result.scalar_one_or_none()
     
     if not llm_config:
-        # 清理已创建的引擎
         await target_db_engine.dispose()
         raise HTTPException(status_code=404, detail="LLM 配置不存在或无权访问")
     
-    # 构建 LLM 实例
-    api_key = llm_config.get_api_key()
-    
-    if llm_config.provider == LlmProvider.anthropic:
-        llm = ChatAnthropic(
-            model=llm_config.model_name,
-            api_key=api_key,
-            temperature=0,
-            streaming=True
-        )
-    else:
-        # 默认为 OpenAI 兼容接口 (包括 OpenAI, DeepSeek, Qwen 等)
-        # 如果 base_url 为空，ChatOpenAI 默认使用 OpenAI 官方地址
-        openai_kwargs = {
-            "model": llm_config.model_name,
-            "api_key": api_key,
-            "temperature": 0,
-            "streaming": True
-        }
-        
-        if llm_config.base_url:
-            openai_kwargs["base_url"] = llm_config.base_url
-            
-        llm = ChatOpenAI(**openai_kwargs)
-    
-    # 3. 创建 Agent
     try:
+        api_key = llm_config.api_key
+    
+        if llm_config.provider == LlmProvider.anthropic:
+            llm = ChatAnthropic(
+                model=llm_config.model_name,
+                api_key=api_key,
+                temperature=0,
+                streaming=True
+            )
+        else:
+            # 默认为 OpenAI 兼容接口 (包括 OpenAI, DeepSeek, Qwen 等)
+            # 如果 base_url 为空，ChatOpenAI 默认使用 OpenAI 官方地址
+            openai_kwargs = {
+                "model": llm_config.model_name,
+                "api_key": api_key,
+                "temperature": 0,
+                "streaming": True
+            }
+
+            if llm_config.base_url:
+                openai_kwargs["base_url"] = llm_config.base_url
+
+            llm = ChatOpenAI(**openai_kwargs)
+    
         agent = ChatBIAgent(db_engine=target_db_engine, llm=llm)
+
     except Exception as e:
         await target_db_engine.dispose()
         raise HTTPException(status_code=500, detail=f"Agent 初始化失败: {str(e)}")

@@ -1,332 +1,596 @@
-# 企业级 AI SQL 分析平台 - 前端代码审查报告
+# ChatBI 企业级 AI 数据分析平台 - 代码审查报告 v2.0
 
-生成时间: 2026-01-20  
-审查范围: d:\Code\KY\frontend  
-后端API: d:\Code\KY\backend
+**生成时间**: 2026-01-22  
+**审查范围**: 前端 (Next.js) + 后端 (FastAPI)  
+**审查类型**: 深度技术审查  
+**目标读者**: 技术负责人 + 开发团队
 
 ---
 
-## 📋 总体评估
+## 📊 执行摘要
+
+### 总体评估
 
 | 维度 | 评分 | 说明 |
 |------|------|------|
-| **需求符合度** | ⭐⭐⭐⭐☆ (4/5) | 核心功能完整,但存在API不匹配问题 |
-| **代码质量** | ⭐⭐⭐⭐☆ (4/5) | 结构清晰,但缺少表单验证 |
-| **安全性** | ⭐⭐⭐⭐⭐ (5/5) | JWT拦截器、数据脱敏实现优秀 |
-| **企业级设计** | ⭐⭐⭐☆☆ (3/5) | UI组件完善,但缺少错误边界和Toast |
+| **架构设计** | ⭐⭐⭐⭐⭐ (5/5) | LangGraph Agent + 多租户架构优秀 |
+| **功能完整性** | ⭐⭐⭐⭐☆ (4/5) | 核心功能完整，部分CRUD API需补充 |
+| **代码质量** | ⭐⭐⭐⭐☆ (4/5) | 结构清晰，类型安全，缺少测试 |
+| **安全性** | ⭐⭐⭐⭐⭐ (5/5) | JWT认证 + 数据加密 + 多租户隔离 |
+| **性能** | ⭐⭐⭐☆☆ (3/5) | 基础可用，需优化响应速度和并发 |
+| **可维护性** | ⭐⭐⭐⭐☆ (4/5) | 日志完善，缺少单元测试 |
+
+**核心结论**: 项目架构优秀，核心功能已完整实现，建议优先补充管理API和性能优化，2周内可达生产就绪状态。
 
 ---
 
-## ✅ 符合要求的部分
+## 🎯 关键发现
 
-### 1. 技术栈 - 完全符合 ✓
-```json
-{
-  "framework": "Next.js 14.2.5",
-  "language": "TypeScript",
-  "state": "Zustand 4.5.2", 
-  "ui": "Shadcn/UI + Radix UI",
-  "forms": "React Hook Form 7.52.1 + Zod 3.23.8",
-  "charts": "ECharts-for-React 3.0.2",
-  "markdown": "react-markdown + remark-gfm"
-}
-```
+### ✅ 超出预期的优点
 
-### 2. 安全实现 - 优秀 ✓
+1. **用户自定义LLM功能已完整实现** 
+   - 数据库模型完整 (`models/llm_config.py`)
+   - Agent工厂逻辑完整 (`utils/agent_factory.py`)
+   - 支持8种LLM提供商 (OpenAI, Claude, DeepSeek, Qwen等)
+   - API Key加密存储 (Fernet加密)
+   - 多租户隔离完善
 
-**JWT 自动注入** (`lib/api.ts`)
-```typescript
-// ✅ 正确实现
-this.client.interceptors.request.use((config) => {
-  const token = localStorage.getItem('jwt_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-```
+2. **动态数据库连接功能完整**
+   - 支持MySQL, PostgreSQL, MS SQL Server
+   - 连接池管理完善
+   - 密码加密存储
+   - 用户隔离安全
 
-**敏感数据脱敏** (`lib/api.ts:89-102`)
-```typescript
-// ✅ 防止密码/API密钥泄露
-private sanitizeLogData(data: any): any {
-  const sensitiveFields = ['password', 'api_key', 'token', 'secret'];
-  // ... 自动替换为 [REDACTED]
-}
-```
-
-**请求体安全** (`types/index.ts:23-28`)
-```typescript
-// ✅ 未包含 user_id (符合要求)
-export interface ChatRequestPayload {
-  query: string;
-  connection_id: number;
-  llm_config_id: number;
-  // ✓ No user_id here! (后端从JWT提取)
-}
-```
-
-### 3. 状态管理 - 清晰 ✓
-- ✅ Zustand store 结构合理
-- ✅ 持久化配置得当 (仅存储必要数据)
-- ✅ 提供了便捷的 selector hooks
+3. **企业级安全设计**
+   - JWT认证机制完整
+   - bcrypt密码哈希
+   - 敏感数据Fernet加密
+   - CORS配置灵活
+   - SQL注入防护
 
 ---
 
-## ❌ 严重问题 (Critical)
+## 🔍 实际技术栈确认
 
-### **问题 1: API 端点不匹配** 🔴
+### 当前配置与文档差异
 
-**前端调用**
-```typescript
-// lib/api-services.ts:118
-sendMessage: async (payload: ChatRequestPayload) => {
-  return await api.stream('/query/stream', payload);  // ❌ 不存在
-}
+**⚠️ 重要发现**: 实际使用的LLM与文档不一致
+
+| 项目 | 文档声明 | 实际配置 (.env) | 状态 |
+|------|----------|----------------|------|
+| **主LLM** | Claude Sonnet 4.5 | DeepSeek V3.2 (Free) | ⚠️ 不一致 |
+| **API端点** | Anthropic官方 | https://open.cherryin.ai/v1 | ⚠️ 不一致 |
+| **API Key** | ANTHROPIC_API_KEY | OPENAI_API_KEY | ⚠️ 不一致 |
+
+**实际 .env 配置**:
+```bash
+OPENAI_API_KEY=sk-T8v6fvI80vcBqmICoYFtWBs0OUSPbqvknOBSZDlyQsK4IFfe
+OPENAI_MODEL=deepseek/deepseek-v3.2(free)
+OPENAI_API_BASE=https://open.cherryin.ai/v1
 ```
 
-**后端实际端点** (`backend/app.py`)
+**建议**: 统一文档与实际配置，或在 README 中说明支持多种LLM。
+
+---
+
+## 🏗️ 架构分析
+
+### 后端架构 (FastAPI)
+
+#### ✅ 优点
+
+1. **分层清晰**
+```
+app.py (API层)
+  ↓
+utils/agent_factory.py (工厂层)
+  ↓
+agent/graph.py (Agent核心)
+  ↓
+agent/tools.py (工具层)
+  ↓
+models/* (数据模型层)
+```
+
+2. **依赖注入设计优秀**
 ```python
-@app.post("/query")  # ❌ 无 /query/stream 端点
-async def query_database(request: QueryRequest):
-    if request.stream:  # 流式通过参数控制
-        return StreamingResponse(...)
+# 安全的用户认证依赖
+async def get_current_user_id(token: str = Depends(oauth2_scheme)):
+    # JWT验证逻辑
+    return user_id
+
+# 系统数据库会话依赖
+async def get_system_db() -> AsyncSession:
+    # 自动管理会话生命周期
+    yield session
 ```
 
-**修复方案**:
-```typescript
-// 方案 A: 使用统一端点,通过参数控制流式
-sendMessage: async (payload: ChatRequestPayload) => {
-  return await api.stream('/query', { ...payload, stream: true });
-}
+3. **Agent工厂模式**
+```python
+# 每个请求动态创建Agent，完全隔离
+agent, engine = await create_agent_from_config(
+    user_id=current_user_id,
+    connection_id=request.connection_id,
+    llm_config_id=request.llm_config_id
+)
+```
 
-// 方案 B: 如果后端支持,添加专用流式端点
-export const chatApi = {
-  sendMessage: async (payload: ChatRequestPayload) => {
-    const response = await fetch(`${apiUrl}/query`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}` 
-      },
-      body: JSON.stringify({ ...payload, stream: true })
+#### ⚠️ 需要改进
+
+1. **混合使用两种Agent实例**
+   - 启动时创建的全局 `agent` (仅用于健康检查)
+   - 请求时动态创建的 `agent_instance` (实际使用)
+   - **建议**: 移除全局agent，健康检查改用配置检查
+
+2. **资源清理逻辑分散**
+   - 流式响应: `stream_agent_with_cleanup()`
+   - 非流式: `try/finally` 手动清理
+   - **建议**: 统一使用上下文管理器
+
+---
+
+### 前端架构 (Next.js 14)
+
+#### ✅ 优点
+
+1. **技术栈现代化**
+   - Next.js 14 App Router
+   - TypeScript严格模式
+   - Zustand轻量级状态管理
+   - Shadcn/UI组件库
+
+2. **API客户端设计良好**
+```typescript
+// lib/api.ts
+class ApiClient {
+  private client: AxiosInstance;
+  
+  constructor() {
+    // 自动注入JWT Token
+    this.client.interceptors.request.use((config) => {
+      const token = localStorage.getItem('jwt_token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+      return config;
     });
-    
-    if (!response.ok) throw new Error(response.statusText);
-    return response.body!;
   }
+  
+  // 敏感数据自动脱敏
+  private sanitizeLogData(data: any): any {
+    // 防止密码/API Key泄露到日志
+  }
+}
+```
+
+3. **SSE流式处理**
+```typescript
+// hooks/useChatStream.ts
+const useChatStream = () => {
+  // 正确处理Server-Sent Events
+  // 断线重连逻辑
+  // 错误处理
 };
 ```
 
----
+#### ⚠️ 需要改进
 
-### **问题 2: 后端 QueryRequest 模型不匹配** 🔴
-
-**前端发送**
+1. **表单验证缺失**
 ```typescript
-// types/index.ts:23-28
-interface ChatRequestPayload {
-  query: string;
-  connection_id: number;  // ❌ 后端不支持
-  llm_config_id: number;  // ❌ 后端不支持
-}
-```
-
-**后端期望**
-```python
-# backend/app.py:57-62
-class QueryRequest(BaseModel):
-    query: str
-    session_id: Optional[str] = "default"
-    stream: bool = False
-    metadata: Optional[Dict[str, Any]] = None
-    # ❌ 没有 connection_id 和 llm_config_id 字段
-```
-
-**影响**: 即使请求发送成功,后端也无法使用数据库连接和LLM配置选择器。
-
-**修复方案**:
-```python
-# 后端需要添加以下字段到 QueryRequest
-class QueryRequest(BaseModel):
-    query: str
-    connection_id: int  # 新增
-    llm_config_id: int  # 新增
-    session_id: Optional[str] = "default"
-    stream: bool = False
-    metadata: Optional[Dict[str, Any]] = None
-```
-
----
-
-### **问题 3: SSE 响应格式不一致** 🔴
-
-**前端期望** (`hooks/useChatStream.ts:99-149`)
-```typescript
-// 前端解析 SSE 事件
-const chunk: SSEChunk = data;
-switch (chunk.type) {
-  case 'thought':        // ❌ 后端未发送
-  case 'observation':    // ❌ 后端未发送
-  case 'final_output':   // ❌ 后端未发送
-  case 'error':
-  case 'end':
-}
-```
-
-**后端实际发送** (`backend/app.py:360-370`)
-```python
-async for event in agent_instance.astream(...):
-    sse_data = {
-        "type": "event",  # ❌ 固定为 "event"
-        "data": event     # ❌ 不是前端期望的结构
-    }
-    yield f"data: {json.dumps(sse_data)}\\n\\n"
-```
-
-**修复方案**:
-
-**选项A: 后端适配前端格式**
-```python
-# backend/app.py:360-370
-async for event in agent_instance.astream(query, session_id, metadata):
-    # 根据事件类型转换
-    if event.get("type") == "thought":
-        sse_data = {"type": "thought", "content": event["content"]}
-    elif event.get("type") == "sql_result":
-        sse_data = {
-            "type": "final_output", 
-            "content": {
-                "sql": event["sql"],
-                "summary": event["summary"],
-                "chartOption": event.get("chart")
-            }
-        }
-    # ... 其他类型
-    
-    yield f"data: {json.dumps(sse_data, ensure_ascii=False)}\\n\\n"
-```
-
-**选项B: 前端适配后端格式**
-```typescript
-// hooks/useChatStream.ts:96-154
-for (const line of lines) {
-  if (line.startsWith('data: ')) {
-    const envelope = JSON.parse(line.slice(6));
-    const event = envelope.data; // 解包
-    
-    // 根据 event 的具体字段判断类型
-    if (event.thought) {
-      updateMessage(aiMessageId, { 
-        metadata: { thoughts: [...thoughts, event.thought] }
-      });
-    } else if (event.sql && event.summary) {
-      updateMessage(aiMessageId, {
-        content: `**SQL:**\n\`\`\`sql\n${event.sql}\n\`\`\``,
-        metadata: { sql_query: event.sql, chart_data: event.chart }
-      });
-    }
-  }
-}
-```
-
----
-
-## ⚠️ 中等问题 (Major)
-
-### **问题 4: 缺少表单验证** 🟡
-
-当前 `settings/page.tsx` 直接使用基础 `Input` 组件,未集成 React Hook Form + Zod:
-
-```typescript
-// ❌ 当前实现
+// ❌ 当前实现 (settings/page.tsx)
 <Input
-  id="port"
   type="number"
   value={dbForm.port}
-  onChange={(e) => setDbForm({ ...dbForm, port: Number(e.target.value) })}
+  onChange={(e) => setDbForm({...dbForm, port: Number(e.target.value)})}
 />
-```
+// 问题: 可以输入负数、超过65535的端口
 
-**问题**:
-- 端口号可以输入负数或超过65535
-- 主机名未验证格式
-- API Key 可以为空提交
-
-**修复示例**:
-```typescript
+// ✅ 应该使用
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
 
-const dbConnectionSchema = z.object({
+const schema = z.object({
+  port: z.number().int().min(1).max(65535)
+});
+```
+
+2. **错误处理使用原生alert**
+```typescript
+// ❌ 当前
+catch (error) {
+  alert(`Failed: ${error}`);
+}
+
+// ✅ 建议使用 Toast
+import { useToast } from "@/hooks/use-toast";
+const { toast } = useToast();
+toast({
+  variant: "destructive",
+  title: "操作失败",
+  description: error.message
+});
+```
+
+---
+
+## 🔴 高优先级问题 (P0 - 必须修复)
+
+### 问题 1: LLM配置管理API缺失
+
+**现状**: 
+- 前端已实现LLM配置管理界面
+- 后端核心逻辑完整
+- **缺失**: CRUD API端点
+
+**影响**: 
+- 用户无法通过前端添加/编辑LLM配置
+- Settings页面完全不可用
+
+**解决方案**:
+创建 `backend/routes/llm_configs.py`:
+
+```python
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from pydantic import BaseModel
+from models.llm_config import LlmConfig, LlmProvider
+from utils.jwt_auth import get_current_user_id
+
+router = APIRouter(prefix="/llm-configs", tags=["LLM Configs"])
+
+class LlmConfigCreate(BaseModel):
+    provider: LlmProvider
+    model_name: str
+    api_key: str
+    base_url: str | None = None
+
+class LlmConfigResponse(BaseModel):
+    id: int
+    provider: str
+    model_name: str
+    base_url: str | None
+    # 不返回API Key
+
+@router.get("/", response_model=list[LlmConfigResponse])
+async def get_llm_configs(
+    current_user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_system_db)
+):
+    """获取当前用户的所有LLM配置"""
+    result = await db.execute(
+        select(LlmConfig).where(LlmConfig.user_id == current_user_id)
+    )
+    configs = result.scalars().all()
+    return [
+        LlmConfigResponse(
+            id=config.id,
+            provider=config.provider.value,
+            model_name=config.model_name,
+            base_url=config.base_url
+        )
+        for config in configs
+    ]
+
+@router.post("/", response_model=LlmConfigResponse)
+async def create_llm_config(
+    data: LlmConfigCreate,
+    current_user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_system_db)
+):
+    """创建新的LLM配置"""
+    new_config = LlmConfig(
+        user_id=current_user_id,
+        provider=data.provider,
+        model_name=data.model_name,
+        base_url=data.base_url
+    )
+    # 自动触发加密 (通过property setter)
+    new_config.api_key = data.api_key
+    
+    db.add(new_config)
+    await db.commit()
+    await db.refresh(new_config)
+    
+    return LlmConfigResponse(
+        id=new_config.id,
+        provider=new_config.provider.value,
+        model_name=new_config.model_name,
+        base_url=new_config.base_url
+    )
+
+@router.put("/{config_id}")
+async def update_llm_config(
+    config_id: int,
+    data: LlmConfigCreate,
+    current_user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_system_db)
+):
+    """更新LLM配置"""
+    result = await db.execute(
+        select(LlmConfig).where(
+            LlmConfig.id == config_id,
+            LlmConfig.user_id == current_user_id
+        )
+    )
+    config = result.scalar_one_or_none()
+    
+    if not config:
+        raise HTTPException(404, "配置不存在或无权访问")
+    
+    config.provider = data.provider
+    config.model_name = data.model_name
+    config.base_url = data.base_url
+    if data.api_key:  # 仅当提供新API Key时更新
+        config.api_key = data.api_key
+    
+    await db.commit()
+    return {"message": "更新成功"}
+
+@router.delete("/{config_id}")
+async def delete_llm_config(
+    config_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_system_db)
+):
+    """删除LLM配置"""
+    result = await db.execute(
+        select(LlmConfig).where(
+            LlmConfig.id == config_id,
+            LlmConfig.user_id == current_user_id
+        )
+    )
+    config = result.scalar_one_or_none()
+    
+    if not config:
+        raise HTTPException(404, "配置不存在或无权访问")
+    
+    await db.delete(config)
+    await db.commit()
+    return {"message": "删除成功"}
+
+@router.post("/test")
+async def test_llm_config(data: LlmConfigCreate):
+    """测试LLM配置是否可用"""
+    try:
+        if data.provider == LlmProvider.anthropic:
+            from langchain_anthropic import ChatAnthropic
+            llm = ChatAnthropic(
+                model=data.model_name,
+                api_key=data.api_key,
+                timeout=10
+            )
+        else:
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                model=data.model_name,
+                api_key=data.api_key,
+                base_url=data.base_url,
+                timeout=10
+            )
+        
+        # 发送测试请求
+        response = await llm.ainvoke("Hi")
+        
+        return {
+            "success": True,
+            "message": "连接成功",
+            "model": data.model_name,
+            "response_preview": response.content[:100]
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"连接失败: {str(e)}"
+        }
+```
+
+**然后在 `app.py` 中注册路由**:
+```python
+from routes.llm_configs import router as llm_configs_router
+app.include_router(llm_configs_router)
+```
+
+**工作量**: 半天  
+**优先级**: P0
+
+---
+
+### 问题 2: 数据库连接管理API缺失
+
+**现状**: 同LLM配置问题，后端逻辑完整但缺少API端点
+
+**解决方案**: 创建 `backend/routes/connections.py`
+
+参考LLM配置的实现模式，创建CRUD端点：
+- `GET /connections` - 获取用户的所有数据库连接
+- `POST /connections` - 创建新连接
+- `PUT /connections/{id}` - 更新连接
+- `DELETE /connections/{id}` - 删除连接
+- `POST /connections/test` - 测试连接
+
+**工作量**: 半天  
+**优先级**: P0
+
+---
+
+### 问题 3: 聊天历史持久化未完成
+
+**现状**: 
+- 数据库表已创建 (`chat_sessions`, `chat_messages`)
+- 会话记录仅存在内存 (`ConversationMemoryManager`)
+- 刷新页面后历史丢失
+
+**影响**: 
+- 管理层无法查看历史对话
+- 无法追溯分析记录
+- 用户体验差
+
+**解决方案**:
+创建 `backend/routes/chat.py`:
+
+```python
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from models.chat import ChatSession, ChatMessage
+from utils.jwt_auth import get_current_user_id
+import uuid
+
+router = APIRouter(prefix="/chat", tags=["Chat"])
+
+@router.get("/sessions")
+async def get_sessions(
+    current_user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_system_db)
+):
+    """获取用户的所有聊天会话"""
+    result = await db.execute(
+        select(ChatSession)
+        .where(ChatSession.user_id == current_user_id)
+        .order_by(ChatSession.updated_at.desc())
+    )
+    sessions = result.scalars().all()
+    return sessions
+
+@router.post("/sessions")
+async def create_session(
+    title: str,
+    current_user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_system_db)
+):
+    """创建新会话"""
+    session = ChatSession(
+        id=str(uuid.uuid4()),
+        user_id=current_user_id,
+        title=title
+    )
+    db.add(session)
+    await db.commit()
+    return {"id": session.id, "title": session.title}
+
+@router.get("/history/{session_id}")
+async def get_history(
+    session_id: str,
+    current_user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_system_db)
+):
+    """获取会话的消息历史"""
+    # 验证权限
+    result = await db.execute(
+        select(ChatSession).where(
+            ChatSession.id == session_id,
+            ChatSession.user_id == current_user_id
+        )
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(404, "会话不存在或无权访问")
+    
+    # 获取消息
+    result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.asc())
+    )
+    messages = result.scalars().all()
+    return messages
+
+@router.post("/messages")
+async def save_message(
+    session_id: str,
+    role: str,  # 'user' or 'ai'
+    content: str,
+    metadata: dict | None = None,
+    current_user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_system_db)
+):
+    """保存消息到数据库"""
+    message = ChatMessage(
+        session_id=session_id,
+        role=role,
+        content=content,
+        metadata=metadata
+    )
+    db.add(message)
+    await db.commit()
+    return {"id": message.id}
+```
+
+**集成到查询流程**:
+```python
+# app.py 的 query_database 函数中
+@app.post("/query")
+async def query_database(request: QueryRequest, ...):
+    # ... 执行查询 ...
+    
+    # 保存用户消息
+    await save_user_message(request.session_id, request.query)
+    
+    result = await agent_instance.ainvoke(...)
+    
+    # 保存AI回复
+    await save_ai_message(
+        request.session_id,
+        result["summary"],
+        metadata={
+            "sql": result["sql"],
+            "chartOption": result["chartOption"]
+        }
+    )
+```
+
+**工作量**: 1天  
+**优先级**: P0
+
+---
+
+## 🟡 中优先级问题 (P1 - 建议修复)
+
+### 问题 4: 前端表单验证缺失
+
+**解决方案**:
+```bash
+# 1. 安装依赖 (已安装)
+npm install react-hook-form zod @hookform/resolvers
+
+# 2. 创建验证Schema
+// frontend/lib/schemas.ts
+import { z } from "zod";
+
+export const dbConnectionSchema = z.object({
   name: z.string().min(1, "名称不能为空"),
+  type: z.enum(["mysql", "postgresql", "mssql"]),
   host: z.string().regex(/^[\w\-\.]+$/, "无效的主机名"),
   port: z.number().int().min(1).max(65535, "端口必须在1-65535之间"),
   username: z.string().min(1),
   password: z.string().min(1),
-  database_name: z.string().min(1),
+  database_name: z.string().min(1)
 });
 
+export const llmConfigSchema = z.object({
+  provider: z.enum(["openai", "anthropic", "deepseek", "qwen"]),
+  model_name: z.string().min(1),
+  api_key: z.string().min(1),
+  base_url: z.string().url().optional()
+});
+
+// 3. 在组件中使用
 const { register, handleSubmit, formState: { errors } } = useForm({
   resolver: zodResolver(dbConnectionSchema)
 });
 ```
 
----
-
-### **问题 5: 缺少全局错误处理** 🟡
-
-**缺失内容**:
-1. **React Error Boundary** (捕获组件崩溃)
-2. **Toast/Notification 组件** (用户友好的错误提示)
-3. **加载状态** (骨架屏或 Spinner)
-
-**当前问题**:
-```typescript
-// settings/page.tsx:136
-} catch (error) {
-  alert(`Failed to save: ${error}`);  // ❌ 使用原生 alert
-}
-```
-
-**推荐方案**:
-```bash
-# 安装 Shadcn Toast 组件
-npx shadcn-ui@latest add toast
-```
-
-```typescript
-import { useToast } from "@/hooks/use-toast";
-
-const { toast } = useToast();
-
-try {
-  await dbConnectionApi.create(dbForm);
-  toast({
-    title: "✅ 连接已创建",
-    description: `数据库连接 "${dbForm.name}" 创建成功`,
-  });
-} catch (error) {
-  toast({
-    variant: "destructive",
-    title: "❌ 操作失败",
-    description: error.response?.data?.message || "请稍后重试",
-  });
-}
-```
+**工作量**: 2天  
+**优先级**: P1
 
 ---
 
-### **问题 6: 缺少认证路由保护** 🟡
+### 问题 5: 缺少路由保护中间件
 
-**当前问题**:
-- 用户可以直接访问 `/chat` 和 `/settings` (即使未登录)
-- 刷新页面后可能丢失会话状态
+**解决方案**:
+创建 `frontend/middleware.ts`:
 
-**修复方案**:
-
-**创建中间件** (`middleware.ts`)
 ```typescript
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -354,368 +618,191 @@ export const config = {
 };
 ```
 
----
-
-### **问题 7: 数据库/LLM 配置 API 端点缺失** 🟡
-
-**前端调用**:
-```typescript
-// lib/api-services.ts:52-81
-export const dbConnectionApi = {
-  getAll: async () => await api.get<DbConnection[]>('/connections'),
-  create: async (connection) => await api.post('/connections', connection),
-  // ...
-};
-
-export const llmConfigApi = {
-  getAll: async () => await api.get<LlmConfig[]>('/llm-configs'),
-  // ...
-};
-```
-
-**后端缺失**:
-```python
-# backend/app.py 中没有以下端点:
-# GET /connections
-# POST /connections
-# PUT /connections/{id}
-# DELETE /connections/{id}
-# GET /llm-configs
-# POST /llm-configs
-# ...
-```
-
-**影响**: Settings 页面完全无法工作。
-
-**修复方案**: 后端需要添加 CRUD 端点 (见下文"需要添加的端点"部分)。
+**工作量**: 1小时  
+**优先级**: P1
 
 ---
 
-## 💡 次要问题 (Minor)
+### 问题 6: Toast通知组件缺失
 
-### **问题 8: 环境变量未配置** 🔵
-
-`.env.example` 只有一个变量:
-```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-```
-
-**建议补充**:
-```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-NEXT_PUBLIC_ENABLE_LOGGING=true
-NEXT_PUBLIC_APP_NAME=AI SQL Analytics
-NEXT_PUBLIC_VERSION=1.0.0
-```
-
----
-
-### **问题 9: 缺少 Loading 状态UI** 🔵
-
-**当前**:
-```typescript
-// chat/page.tsx:302-310
-{isLoading ? (
-  <Button type="button" variant="destructive" onClick={stopMessage}>
-    <Square className="h-4 w-4" />  // ❌ 不直观
-  </Button>
-) : ( ... )}
-```
-
-**改进**:
-```typescript
-{isLoading ? (
-  <Button type="button" variant="destructive" onClick={stopMessage}>
-    <Loader2 className="h-4 w-4 animate-spin" />
-    <span className="ml-2">停止生成</span>
-  </Button>
-) : ( ... )}
-```
-
----
-
-### **问题 10: 缺少 TypeScript 类型检查** 🔵
-
-**当前问题**:
-```typescript
-// settings/page.tsx:159
-const handleEditDb = (connection: any) => {  // ❌ 使用 any
-  setDbForm({ ... });
-};
-```
-
-**修复**:
-```typescript
-const handleEditDb = (connection: DbConnection) => {
-  setDbForm({
-    name: connection.name,
-    type: connection.type,
-    // ...
-  });
-};
-```
-
----
-
-## 📝 需要添加的后端端点
-
-### 1. 认证 API
-```python
-# backend/routes/auth.py (新建)
-
-@router.post("/auth/login")
-async def login(credentials: LoginRequest):
-    # 验证用户名密码
-    # 生成 JWT token
-    return {"id": user.id, "username": user.username, "email": user.email, "token": jwt_token}
-
-@router.post("/auth/register")
-async def register(user_data: RegisterRequest):
-    # 创建用户
-    # 生成 JWT token
-    return {"id": user.id, "token": jwt_token}
-
-@router.get("/auth/me")
-async def current_user(current_user: User = Depends(get_current_user)):
-    return current_user
-```
-
-### 2. 数据库连接 API
-```python
-# backend/routes/connections.py (新建)
-
-@router.get("/connections")
-async def get_connections(current_user: User = Depends(get_current_user)):
-    # 返回当前用户的所有连接 (不包含密码)
-    return connections
-
-@router.post("/connections")
-async def create_connection(
-    data: DbConnectionForm, 
-    current_user: User = Depends(get_current_user)  # 从JWT提取user_id
-):
-    # 创建连接 (不要在请求体中要求 user_id)
-    new_connection = DbConnection(user_id=current_user.id, **data.dict())
-    # 保存到数据库
-    return new_connection
-
-@router.post("/connections/test")
-async def test_connection(data: DbConnectionForm):
-    # 测试连接
-    try:
-        # 尝试连接数据库
-        return {"success": True, "message": "连接成功"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-@router.put("/connections/{id}")
-async def update_connection(
-    id: int, 
-    data: Partial[DbConnectionForm],
-    current_user: User = Depends(get_current_user)
-):
-    # 验证连接属于当前用户
-    # 更新连接
-    return updated_connection
-
-@router.delete("/connections/{id}")
-async def delete_connection(id: int, current_user: User = Depends(get_current_user)):
-    # 验证连接属于当前用户
-    # 删除连接
-    return {"message": "deleted"}
-```
-
-### 3. LLM 配置 API
-```python
-# backend/routes/llm_configs.py (新建)
-
-# 类似结构,端点为 /llm-configs
-@router.get("/llm-configs")
-@router.post("/llm-configs")
-@router.put("/llm-configs/{id}")
-@router.delete("/llm-configs/{id}")
-@router.post("/llm-configs/test")
-```
-
-### 4. 聊天历史 API
-```python
-# backend/routes/chat.py (新建)
-
-@router.get("/chat/sessions")
-async def get_sessions(current_user: User = Depends(get_current_user)):
-    # 返回用户的所有聊天会话
-    return sessions
-
-@router.get("/chat/history/{session_id}")
-async def get_history(session_id: str, current_user: User = Depends(get_current_user)):
-    # 返回指定会话的消息历史
-    return messages
-
-@router.post("/chat/sessions")
-async def save_session(data: SaveSessionRequest, current_user: User = Depends(get_current_user)):
-    # 保存聊天会话
-    return {"id": session_id}
-
-@router.delete("/chat/sessions/{session_id}")
-async def delete_session(session_id: str, current_user: User = Depends(get_current_user)):
-    # 删除会话
-    return {"message": "deleted"}
-```
-
----
-
-## 🎨 UI/UX 改进建议
-
-### 1. 增强 ToB 设计感
-
-**当前**: Settings 页面使用原生 `<table>` 标签,不够现代化。
-
-**建议**: 使用 Shadcn 的 `Table` 组件 + 数据排序/过滤功能:
-```typescript
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Input } from "@/components/ui/input";
-
-const [searchTerm, setSearchTerm] = useState("");
-const filteredConnections = connections.filter(conn => 
-  conn.name.toLowerCase().includes(searchTerm.toLowerCase())
-);
-
-<div className="space-y-4">
-  <Input 
-    placeholder="搜索连接..." 
-    value={searchTerm}
-    onChange={(e) => setSearchTerm(e.target.value)}
-  />
-  
-  <Table>
-    <TableHeader>
-      <TableRow>
-        <TableHead>名称</TableHead>
-        <TableHead>类型</TableHead>
-        {/* ... */}
-      </TableRow>
-    </TableHeader>
-    <TableBody>
-      {filteredConnections.map(conn => (
-        <TableRow key={conn.id}>
-          <TableCell>{conn.name}</TableCell>
-          {/* ... */}
-        </TableRow>
-      ))}
-    </TableBody>
-  </Table>
-</div>
-```
-
-### 2. 添加空状态插图
-
-**当前**: 空列表显示纯文本。
-
-**建议**: 使用图标 + 引导操作:
-```typescript
-{connections.length === 0 && (
-  <div className="flex flex-col items-center justify-center py-12 text-center">
-    <Database className="h-12 w-12 text-muted-foreground mb-4" />
-    <h3 className="text-lg font-semibold mb-2">还没有数据库连接</h3>
-    <p className="text-sm text-muted-foreground mb-4">
-      创建您的第一个连接来开始数据分析
-    </p>
-    <Button onClick={() => setDbDialogOpen(true)}>
-      <Plus className="h-4 w-4 mr-2" />
-      添加连接
-    </Button>
-  </div>
-)}
-```
-
-### 3. 添加确认对话框
-
-**当前**: 使用原生 `confirm()` 删除确认。
-
-**建议**: 使用 Shadcn AlertDialog:
+**解决方案**:
 ```bash
-npx shadcn-ui@latest add alert-dialog
+npx shadcn-ui@latest add toast
 ```
 
+然后在 `app/layout.tsx` 中添加:
 ```typescript
-<AlertDialog>
-  <AlertDialogTrigger asChild>
-    <Button variant="ghost" size="sm">
-      <Trash2 className="h-4 w-4" />
-    </Button>
-  </AlertDialogTrigger>
-  <AlertDialogContent>
-    <AlertDialogHeader>
-      <AlertDialogTitle>确认删除</AlertDialogTitle>
-      <AlertDialogDescription>
-        此操作将永久删除连接 "{connection.name}"。此操作无法撤销。
-      </AlertDialogDescription>
-    </AlertDialogHeader>
-    <AlertDialogFooter>
-      <AlertDialogCancel>取消</AlertDialogCancel>
-      <AlertDialogAction onClick={() => handleDeleteDb(connection.id)}>
-        删除
-      </AlertDialogAction>
-    </AlertDialogFooter>
-  </AlertDialogContent>
-</AlertDialog>
+import { Toaster } from "@/components/ui/toaster"
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        {children}
+        <Toaster />
+      </body>
+    </html>
+  )
+}
+```
+
+**工作量**: 30分钟  
+**优先级**: P1
+
+---
+
+## 🔵 低优先级问题 (P2 - 优化项)
+
+### 问题 7: 缺少单元测试
+
+**建议**:
+```bash
+# 后端测试
+cd backend
+pip install pytest pytest-asyncio pytest-cov
+
+# 创建测试
+# tests/test_agent_factory.py
+# tests/test_auth.py
+# tests/test_encryption.py
+
+# 前端测试
+cd frontend
+npm install --save-dev jest @testing-library/react @testing-library/jest-dom
+```
+
+**工作量**: 3-5天  
+**优先级**: P2
+
+---
+
+### 问题 8: 缺少权限管理系统
+
+**需求**: 不同管理层级访问不同数据范围
+
+**建议实现RBAC**:
+```python
+# models/role.py
+class Role(Base):
+    __tablename__ = "roles"
+    id: Mapped[int]
+    name: Mapped[str]  # admin, manager, analyst
+    permissions: Mapped[str]  # JSON: ["read:all", "write:own"]
+
+# models/user.py 添加
+class User(Base):
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"))
+    role: Mapped["Role"] = relationship()
+```
+
+**工作量**: 2-3天  
+**优先级**: P2
+
+---
+
+## 📈 性能优化建议
+
+### 优化 1: 启用向量缓存
+
+参考 `OPTIMIZATION_ROADMAP.md` 的 Strategy 3
+
+**预期提升**: 重复查询响应时间 30秒 → 1秒 (97%提升)
+
+---
+
+### 优化 2: Prompt精简
+
+参考 `OPTIMIZATION_ROADMAP.md` 的 Strategy 1
+
+**预期提升**: Token使用减少30-40%，速度提升25%
+
+---
+
+### 优化 3: 数据库连接池调优
+
+```python
+# backend/config.py
+DB_POOL_SIZE: int = 20  # 从10增加到20
+DB_MAX_OVERFLOW: int = 40  # 从20增加到40
+DB_POOL_RECYCLE: int = 3600  # 新增: 1小时回收
+DB_POOL_PRE_PING: bool = True  # 新增: 连接前ping
 ```
 
 ---
 
-## 🔧 快速修复清单
+## 🎯 实施路线图
 
-### 高优先级 (本周内修复)
-- [ ] **修复 API 端点不匹配** (问题1)
-- [ ] **后端添加 QueryRequest 字段** (问题2)
-- [ ] **统一 SSE 响应格式** (问题3)
-- [ ] **后端实现 CRUD 端点** (问题7)
-- [ ] **添加路由保护中间件** (问题6)
+### Week 1: 核心功能补全 (P0)
+- [ ] Day 1-2: LLM配置CRUD API
+- [ ] Day 3-4: 数据库连接CRUD API
+- [ ] Day 5-7: 聊天历史持久化
 
-### 中优先级 (本月内完成)
-- [ ] **集成 React Hook Form + Zod** (问题4)
-- [ ] **添加 Toast 通知** (问题5)
-- [ ] **完善 TypeScript 类型** (问题10)
+### Week 2: 用户体验优化 (P1)
+- [ ] Day 1-2: 表单验证集成
+- [ ] Day 3: 路由保护中间件
+- [ ] Day 4: Toast通知组件
+- [ ] Day 5-7: UI/UX优化
 
-### 低优先级 (迭代优化)
-- [ ] **UI 组件升级** (UI/UX 建议)
-- [ ] **添加加载动画** (问题9)
-- [ ] **环境变量完善** (问题8)
-
----
-
-## 📊 代码质量评分详情
-
-| 指标 | 评分 | 说明 |
-|------|------|------|
-| **架构设计** | 9/10 | Zustand + API层分离清晰 |
-| **类型安全** | 7/10 | 部分使用 `any`,需改进 |
-| **错误处理** | 5/10 | 使用原生 alert,缺少统一机制 |
-| **安全性** | 10/10 | JWT拦截器和数据脱敏完善 |
-| **可维护性** | 8/10 | 代码结构清晰,注释充分 |
-| **测试覆盖** | 0/10 | ⚠️ **无任何测试文件** |
+### Week 3: 性能与测试 (P2)
+- [ ] Day 1-3: 性能优化实施
+- [ ] Day 4-5: 单元测试编写
+- [ ] Day 6-7: 集成测试与文档
 
 ---
 
-## 🎯 总结
+## 📊 代码质量评分
 
-### 核心优点
-1. ✅ **架构合理**: 技术栈选择符合企业级标准
-2. ✅ **安全性强**: JWT 和敏感数据处理到位
-3. ✅ **代码整洁**: TypeScript + 模块化设计
-
-### 必须解决的问题
-1. ❌ **API 不匹配**: 前后端端点和数据格式未对齐
-2. ❌ **后端缺失**: 认证、数据库连接、LLM 配置的 CRUD 端点未实现
-3. ❌ **表单验证**: 未集成 Zod,存在数据安全隐患
-
-### 下一步行动
-1. **立即**: 修复 API 端点问题 (1-3小时)
-2. **本周**: 后端添加缺失的端点 (1-2天)
-3. **本月**: 完善表单验证和错误处理 (3-5天)
+| 指标 | 当前 | 目标 | 差距 |
+|------|------|------|------|
+| **架构设计** | 9/10 | 10/10 | 移除全局Agent实例 |
+| **类型安全** | 8/10 | 10/10 | 补充类型定义 |
+| **错误处理** | 6/10 | 9/10 | 统一错误提示机制 |
+| **安全性** | 10/10 | 10/10 | ✅ 优秀 |
+| **可维护性** | 8/10 | 9/10 | 增加注释和文档 |
+| **测试覆盖** | 0/10 | 8/10 | 编写单元测试 |
+| **性能** | 6/10 | 9/10 | 实施优化方案 |
 
 ---
 
-**审查人**: AI Code Reviewer  
-**联系方式**: 如有疑问,请在代码仓库提交 Issue  
-**最后更新**: 2026-01-20 22:49:38
+## 🎉 值得表扬的设计
+
+1. **Agent工厂模式** - 完美实现多租户隔离
+2. **加密存储** - API Key和密码加密存储安全
+3. **资源管理** - 数据库连接正确清理
+4. **日志系统** - structlog结构化日志完善
+5. **依赖注入** - FastAPI依赖注入使用得当
+
+---
+
+## 🚀 下一步行动
+
+### 立即执行 (本周)
+1. ✅ 实现LLM配置CRUD API
+2. ✅ 实现数据库连接CRUD API
+3. ✅ 实现聊天历史API
+4. ✅ 统一文档与实际配置
+
+### 短期计划 (1-2周)
+5. ✅ 表单验证集成
+6. ✅ 路由保护
+7. ✅ Toast通知
+8. ✅ 性能优化第一阶段
+
+### 中期计划 (1个月)
+9. 单元测试覆盖
+10. 权限管理系统
+11. UI/UX全面优化
+12. 监控告警系统
+
+---
+
+## 📞 联系方式
+
+**技术负责人**: [待填写]  
+**代码审查人**: DiscoverBot AI  
+**审查日期**: 2026-01-22  
+**下次审查**: 2026-02-05
+
+---
+
+**总结**: 项目代码质量整体优秀，架构设计合理，核心功能完整。主要需要补充管理API和优化性能，预计2-3周可达生产就绪状态。建议优先完成P0任务，然后开展性能优化和测试工作。
