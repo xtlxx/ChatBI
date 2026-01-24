@@ -1,51 +1,16 @@
-[tool.pytest.ini_options]
-minversion = "8.0"
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-asyncio_mode = "auto"
-addopts = [
-    "-v",
-    "--strict-markers",
-    "--tb=short",
-    "--cov=agent",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-]
-markers = [
-    "asyncio: mark test as async",
-    "integration: mark test as integration test",
-    "unit: mark test as unit test",
-]
-
-[tool.coverage.run]
-source = ["agent", "app"]
-omit = [
-    "*/tests/*",
-    "*/__init__.py",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-    "if TYPE_CHECKING:",
-]
-
 [tool.black]
 line-length = 100
-target-version = ['py311']
+target-version = ['py314']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
-  # directories
-  \.eggs
-  | \.git
+  # 默认排除
+  \.git
   | \.venv
+  | venv
+  | __pycache__
+  | \.pytest_cache
+  | \.mypy_cache
   | build
   | dist
 )/
@@ -53,23 +18,44 @@ extend-exclude = '''
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"
+
+# 启用的规则
 select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "C",  # flake8-comprehensions
-    "B",  # flake8-bugbear
-]
-ignore = [
-    "E501",  # line too long (handled by black)
-    "B008",  # do not perform function calls in argument defaults
-    "C901",  # too complex
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
 ]
 
+# 忽略的规则
+ignore = [
+    "E501",  # 行太长（由black处理）
+    "B008",  # 函数调用在参数默认值中
+    "B905",  # zip() without an explicit strict= parameter
+]
+
+# 排除文件
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.isort]
+known-first-party = ["app", "agent", "models", "utils", "routes"]
+
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
@@ -79,4 +65,62 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
+warn_unreachable = true
 strict_equality = true
+
+# 排除检查
+exclude = [
+    'venv/',
+    '.venv/',
+    'tests/',
+    'migrations/',
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "langchain.*",
+    "langchain_core.*",
+    "langchain_community.*",
+    "langchain_anthropic.*",
+    "langchain_openai.*",
+    "langgraph.*",
+    "voyageai.*",
+    "pinecone.*",
+    "structlog.*",
+    "prometheus_client.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+    "--cov=.",
+    "--cov-report=html",
+    "--cov-report=term-missing",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatbi-backend"
+version = "3.0.0"
+description = "企业级 AI SQL 分析平台后端"
+readme = "README.md"
+requires-python = ">=3.14"
+authors = [
+    {name = "ChatBI Team"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.14",
+]

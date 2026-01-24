@@ -1,4 +1,11 @@
 #auth.py
+# 角色: 认证工具库 (Authentication Utilities)
+# 功能:
+# JWT token 创建和验证
+# 密码哈希和验证
+# 用户认证逻辑
+# 内存用户存储 (用于测试)
+# Pydantic 数据模型定义
 import bcrypt
 from jose import jwt
 from datetime import datetime, timedelta

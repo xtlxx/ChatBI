@@ -1,4 +1,10 @@
-# routes/auth.py
+# 文件位置: backend/routes/auth.py
+# 角色: API 路由处理器 (API Route Handlers)
+# 功能:
+# FastAPI 路由定义 (/auth/register, /auth/login)
+# 数据库操作 (使用 SQLAlchemy)
+# HTTP 请求/响应处理
+# 调用认证工具库函数
 import logging
 from typing import Annotated
 from fastapi import APIRouter, HTTPException, Depends, status
