@@ -1,0 +1,155 @@
+# ChatBI Core Project - .gitignore for core files only
+
+# === 开发工具和IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === 构建产物和依赖 ===
+node_modules/
+dist/
+build/
+out/
+target/
+vendor/
+*.egg-info/
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+.venv/
+
+# === 包管理文件 ===
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+uv.lock
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# === 测试和覆盖率 ===
+tests/
+__tests__/
+*.spec.*
+*.test.*
+e2e/
+mocks/
+coverage/
+*.coverage
+.coverage
+htmlcov/
+.pytest_cache/
+test-results/
+*.lcov
+
+# === 文档和报告 ===
+docs/
+*.md
+!README.md
+*.txt
+
+# === CI/CD和流程 ===
+.github/
+.gitlab/
+scripts/
+Makefile
+*.yml
+*.yaml
+
+# === 配置文件 ===
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.config.js
+*.config.ts
+vite.config.*
+vitest.config.*
+eslint.config.js
+postcss.config.js
+tailwind.config.*
+next.config.*
+
+# === 日志和临时文件 ===
+logs/
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# === 数据库相关 ===
+*.sql
+!backend/database_init.sql
+!backend/add_temperature_column.sql
+*.db
+*.sqlite
+*.sqlite3
+
+# === 分析和报告文件 ===
+*.dot
+*.mmd
+*.xml
+coverage.xml
+metadata.json
+schema_analysis.json
+impact_analysis.md
+lineage.*
+OUTPUT_FLOW_*
+SCHEMA_ANALYSIS_*
+AI_AGENT_*
+PR_*
+README_*
+
+# === 缓存和运行时 ===
+.cache/
+.vite/
+*.pid
+*.seed
+*.pid.lock
+
+# === 工具脚本 ===
+*.bat
+*.sh
+analyze_schema.py
+generate_code.py
+verify_i18n.py
+testproject.py
+
+# === 备份和导出 ===
+Dump*.sql
+Dump*.txt
+backendcode.txt
+code.txt
+
+# === 语言特定 ===
+# Python
+*.so
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+
+# Node.js
+.npm
+.eslintcache
+.nyc_output
+
+# === 编码和字符 ===
+*.encoding
+*.binary
