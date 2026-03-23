@@ -1,66 +1,38 @@
-#agent/state.py
-"""
-LangGraph Agent 状态定义
-定义 Agent 执行过程中的状态结构
-"""
-from typing import TypedDict, Annotated, List, Dict, Any, Optional
-from operator import add
+# agent/state.py
+# 定义 Agent 执行过程中的状态结构
+# 包含核心输入、流程控制、中间产物、错误与降级等
+import operator
+from typing import Annotated, Any, TypedDict
+
 from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
+
 
 class AgentState(TypedDict):
-    """Agent 状态定义"""
-    #消息历史 -使用LangGraph内置的add_messages，处理ID去重
-    messages: Annotated[List[BaseMessage], add_messages]
+    # ── 核心输入 ──
+    query: str                                             # 用户原始问题
+    session_id: str                                        # 会话标识
+    messages: Annotated[list[BaseMessage], operator.add]   # 完整对话历史
+    metadata: dict[str, Any]                               # few_shot_examples、user_id 等
 
-    # 用户原始查询
-    query: str
-    
-    # 检索到的上下文
-    context: Annotated[List[Dict[str, Any]], add]
-    
-    # 生成的 SQL 查询
-    sql_query: Optional[str]
-    
-    # SQL 执行结果
-    sql_result: Optional[Any]
-    
-    # 数据洞察
-    data_insight: Optional[str]
-    
-    # ECharts 配置
-    echarts_option: Optional[Dict[str, Any]]
-    
-    # 错误信息
-    error: Optional[str]
-    
-    # 重试计数
-    retry_count: int
-    
-    # 执行步骤追踪
-    steps: Annotated[List[str], add]
-    
-    # 会话 ID
-    session_id: str
-    
-    # 元数据
-    metadata: Dict[str, Any]
+    # ── 流程控制 ──
+    current_phase: str
+    steps: Annotated[list[str], operator.add]          # 执行过的节点名日志
+    retry_counts: dict[str, int]                       # 按阶段统计重试次数（更精细）
 
+    # ── 中间产物 ──
+    schema_context: str | None                         # 动态获取的 schema
+    thinking: str | None                               # 业务思考过程（自然语言）
+    sql_attempt: dict[str, Any] | None                 # 最新一次 SQL 生成结果
+    validation_result: dict[str, Any] | None           # { "is_valid": bool, "issues": list[str], "message": str }
+    execution_result: dict[str, Any] | None            # { "data": list[dict], "row_count": int, "truncated": bool, "error": str | None }
+    final_output: dict[str, Any] | None                # 最终给前端的结构化结果
 
-class ConversationMemory(TypedDict):
-    """对话记忆状态"""
-    
-    # 会话 ID
-    session_id: str
-    
-    # 消息历史
-    messages: List[BaseMessage]
-    
-    # 实体追踪
-    entities: Dict[str, Any]
-    
-    # 对话摘要
-    summary: Optional[str]
-    
-    # 最后更新时间
-    last_updated: float
+    # ── 错误与降级 ──
+    has_error: bool                                    # 是否进入错误路径
+    last_error: str | None                             # 用户友好错误信息
+    error_phase: str | None                            # 出错的阶段名称
+    fallback_used: bool                                # 是否使用了降级方案（静态、schema 、简单报告）
+
+    # ── 元信息（调试 & 监控用） ──
+    timings: dict[str, float]                          # 各阶段耗时（毫秒）
+    #token_usage: dict[str, int]                        # 如果能拿到 LLM token 消耗

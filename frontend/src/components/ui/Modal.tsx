@@ -31,7 +31,7 @@ export function Modal({ isOpen, onClose, title, children, description }: ModalPr
 
           <Dialog.Close asChild>
             <button
-              className="text-muted-foreground hover:bg-accent hover:text-accent-foreground absolute top-[10px] right-[10px] inline-flex h-[25px] w-[25px] appearance-none items-center justify-center rounded-full focus:shadow-[0_0_0_2px] focus:shadow-ring focus:outline-none transition-colors"
+              className="text-muted-foreground hover:bg-accent hover:text-accent-foreground absolute top-[10px] right-[10px] inline-flex h-[25px] w-[25px] appearance-none items-center justify-center rounded-full focus:shadow-[0_0_0_2px] focus:shadow-ring focus:outline-none transition-colors z-[60]"
               aria-label={t('common.close')}
               onClick={onClose}
             >

@@ -1,7 +1,11 @@
 # models/base.py
-from datetime import datetime, timezone
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+# 基础模型
+# 包含所有表的公共字段（如创建时间、更新时间）
+from datetime import UTC, datetime
+
 from sqlalchemy import DateTime
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
 
 class Base(DeclarativeBase):
 
@@ -10,13 +14,11 @@ class Base(DeclarativeBase):
 
     # 抽取公共字段（Mixin模式）
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        sort_order=999
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), sort_order=999
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-        sort_order=1000
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        sort_order=1000,
     )

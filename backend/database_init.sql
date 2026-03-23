@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) UNIQUE NOT NULL COMMENT '用户名',
     email VARCHAR(100) UNIQUE NOT NULL COMMENT '邮箱',
     hashed_password VARCHAR(255) NOT NULL COMMENT '哈希密码 (应使用bcrypt或Argon2)',
+    role VARCHAR(20) DEFAULT 'user' NOT NULL COMMENT '用户角色 (user/admin)',
     created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '用户表';
@@ -77,6 +78,7 @@ CREATE TABLE IF NOT EXISTS llm_configs (
     model_name VARCHAR(100) NOT NULL COMMENT '模型名称',
     encrypted_api_key VARBINARY(1024) NOT NULL COMMENT '加密后的API密钥',
     base_url VARCHAR(512) NULL COMMENT '自定义API端点',
+    temperature FLOAT NULL COMMENT '温度参数',
     created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -112,8 +114,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     session_id VARCHAR(36) NOT NULL COMMENT '会话ID',
     role ENUM('user', 'ai', 'system') NOT NULL COMMENT '角色',
     content MEDIUMTEXT NOT NULL COMMENT '消息内容',
-    metadata JSON NULL COMMENT '元数据 (thoughts, sql_query, chart_data等)',
+    message_metadata JSON NULL COMMENT '元数据 (thoughts, sql_query, chart_data等)',
+    feedback VARCHAR(20) DEFAULT NULL COMMENT '用户反馈 (like/dislike)',
+    feedback_text TEXT DEFAULT NULL COMMENT '反馈详情',
     created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
     FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
     INDEX idx_session_id_created_at (session_id, created_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '聊天消息表';
@@ -121,19 +126,21 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 -- 6. 插入测试数据 (可选)
 -- 注意: hashed_password 是一个示例值，实际生产中必须由您的应用程序通过安全哈希算法（如 bcrypt）动态生成。
 -- ============================================
-INSERT INTO users (username, email, hashed_password)
+INSERT INTO users (username, email, hashed_password, role)
 VALUES (
         'admin',
         'admin@example.com',
-        '$2b$12$Ebed8ZOn2gBw.o.C.mI8O.ds34f/PlTjKLs2T6T.pl.b.Q3g7fQ8i' -- 示例密码: password123
+        '$2b$12$LiNj1Uk/rt5MHzFOZEad1Om7/iuHkGc3QSim7r/.evwkBRmjU8C9i', -- 示例密码: 123456
+        'admin'
     ),
     (
         'demo',
         'demo@example.com',
-        '$2b$12$Vd5dK8C.Zz.P9R.E4fI7Y.Lz2n.Q8mI0j.e6T.s.q9W.p0r.u7W.k' -- 示例密码: demo123
+        '$2b$12$Vd5dK8C.Zz.P9R.E4fI7Y.Lz2n.Q8mI0j.e6T.s.q9W.p0r.u7W.k', -- 示例密码: demo123
+        'user'
     ) ON DUPLICATE KEY
 UPDATE username =
-VALUES(username);
+VALUES(username), role = VALUES(role);
 -- ============================================
 -- 完成
 -- ============================================

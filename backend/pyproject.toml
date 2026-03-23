@@ -1,6 +1,9 @@
+[tool.setuptools]
+packages = ["agent", "core", "models", "routes", "utils", "vis"]
+
 [tool.black]
 line-length = 100
-target-version = ['py314']
+target-version = ['py313']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -18,7 +21,7 @@ extend-exclude = '''
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py313"
 
 # 启用的规则
 select = [
@@ -55,7 +58,7 @@ exclude = [
 known-first-party = ["app", "agent", "models", "utils", "routes"]
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.13"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
@@ -115,12 +118,12 @@ name = "chatbi-backend"
 version = "3.0.0"
 description = "企业级 AI SQL 分析平台后端"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 authors = [
     {name = "ChatBI Team"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.13",
 ]

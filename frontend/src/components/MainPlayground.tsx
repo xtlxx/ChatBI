@@ -1,14 +1,16 @@
-import { useState, useRef, useEffect } from "react";
-import { Share2, MoreVertical, Play, ChevronDown, ChevronRight, Search, Box, PanelLeftClose, PanelLeftOpen, Loader2, AlertCircle } from "lucide-react";
-import * as Collapsible from "@radix-ui/react-collapsible";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Share2, MoreVertical, PanelLeftClose, PanelLeftOpen, Loader2, Image as ImageIcon, Mic, Send, BarChart3, Database, TrendingUp, Package, Plus } from "lucide-react";
 import { useOutletContext, useParams, useNavigate } from "react-router-dom";
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useChatSettingsStore } from "@/store/chat-settings-store";
 import { chatService } from "@/services/chat-service";
-import { ChartRenderer } from "@/components/ChartRenderer";
 import toast from "react-hot-toast";
 import { useTranslation } from "react-i18next";
+import { ChatMessage } from "@/components/ChatMessage";
+import { ModelSelector } from "@/components/ModelSelector";
+import type { Message } from "@/types/chat";
+import type { ChartOption } from "@/types/api";
+
+import { speechService } from "@/services/speech-service";
 
 interface LayoutContext {
     isLeftSidebarOpen: boolean;
@@ -17,389 +19,543 @@ interface LayoutContext {
     setSidebarView: (v: 'nav' | 'settings') => void;
 }
 
-interface Message {
-    id: string | number;
-    role: 'user' | 'ai';
-    content: string;
-    thoughts: string[];
-    sql?: string;
-    chartOption?: any;
-    isLoading?: boolean;
-    isError?: boolean;
-    timestamp: number;
-}
+const CONTAINER_CLASS = "w-full max-w-3xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl 2xl:max-w-[75%] mx-auto transition-all duration-300 ease-in-out";
 
 export function MainPlayground() {
-  const { t } = useTranslation();
-  const { 
-      isLeftSidebarOpen, 
-      setIsLeftSidebarOpen,
-      sidebarView,
-      setSidebarView
-  } = useOutletContext<LayoutContext>();
-  
-  const { sessionId: routeSessionId } = useParams();
-  const navigate = useNavigate();
+    const { t } = useTranslation();
+    const {
+        isLeftSidebarOpen,
+        setIsLeftSidebarOpen,
+        setSidebarView
+    } = useOutletContext<LayoutContext>();
 
-  const onToggleLeftSidebar = () => setIsLeftSidebarOpen(!isLeftSidebarOpen);
+    const { sessionId: routeSessionId } = useParams();
+    const navigate = useNavigate();
 
-  const { selectedConnectionId, selectedLlmConfigId } = useChatSettingsStore();
-  
-  const [sessionId, setSessionId] = useState<string>("");
-  const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const onToggleLeftSidebar = () => setIsLeftSidebarOpen(!isLeftSidebarOpen);
 
-  // Initialize Session
-  useEffect(() => {
-    if (!routeSessionId || routeSessionId === 'new') {
-        setSessionId(crypto.randomUUID());
-        setMessages([]);
-    } else {
-        setSessionId(routeSessionId);
-        loadSessionHistory(routeSessionId);
-    }
-  }, [routeSessionId]);
+    const { selectedConnectionId, selectedLlmConfigId } = useChatSettingsStore();
 
-  const loadSessionHistory = async (id: string) => {
-    try {
-        setIsLoadingHistory(true);
-        const session = await chatService.getSession(id);
-        
-        // Map backend messages to frontend format
-        const mappedMessages: Message[] = session.messages.map(msg => ({
-            id: msg.id,
-            role: msg.role === 'system' ? 'ai' : msg.role, // Treat system as AI for now or hide it
-            content: msg.content,
-            thoughts: [], // Thoughts might not be persisted in simple message history yet, or stored in metadata
-            sql: msg.message_metadata?.sql_query,
-            chartOption: msg.message_metadata?.chart_data,
-            timestamp: new Date(msg.created_at).getTime()
-        }));
-        
-        setMessages(mappedMessages);
-    } catch (error) {
-        console.error("Failed to load session", error);
-        toast.error(t('chat.loadHistoryError'));
-        // Fallback to new session if not found?
-        // navigate('/chat/new'); 
-    } finally {
-        setIsLoadingHistory(false);
-    }
-  };
+    const [sessionId, setSessionId] = useState<string>("");
+    const [input, setInput] = useState("");
+    const [messages, setMessages] = useState<Message[]>([]);
+    const [isStreaming, setIsStreaming] = useState(false);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const shouldAutoScroll = useRef(true);
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, messages.length]); 
+    const [isListening, setIsListening] = useState(false);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
 
-  const handleSendMessage = async () => {
-    if (!input.trim() || isStreaming) return;
-
-    if (!selectedConnectionId || !selectedLlmConfigId) {
-        toast.error("Please select a Database Connection and Model in settings.");
-        setSidebarView('settings');
-        if (!isLeftSidebarOpen) setIsLeftSidebarOpen(true);
-        return;
-    }
-
-    const currentInput = input;
-    const userMsg: Message = {
-        id: crypto.randomUUID(),
-        role: 'user',
-        content: currentInput,
-        thoughts: [],
-        timestamp: Date.now()
-    };
-
-    const aiMsgId = crypto.randomUUID();
-    const aiMsg: Message = {
-        id: aiMsgId,
-        role: 'ai',
-        content: '',
-        thoughts: [],
-        isLoading: true,
-        timestamp: Date.now()
-    };
-
-    setMessages(prev => [...prev, userMsg, aiMsg]);
-    setInput("");
-    setIsStreaming(true);
-
-    // Reset textarea height
-    if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
-    }
-
-    try {
-        await chatService.sendMessageStream(
-            {
-                query: currentInput,
-                connection_id: selectedConnectionId,
-                llm_config_id: selectedLlmConfigId,
-                session_id: sessionId,
-                stream: true
-            },
-            (event) => {
-                // Handle SSE Chunk
-                setMessages(prev => {
-                    const newMessages = [...prev];
-                    const msgIndex = newMessages.findIndex(m => String(m.id) === String(aiMsgId));
-                    if (msgIndex === -1) return prev;
-
-                    const msg = { ...newMessages[msgIndex] };
-                    
-                    switch (event.type) {
-                        case 'thought':
-                            msg.thoughts = [...msg.thoughts, event.content];
-                            break;
-                        case 'final_output':
-                            msg.content = event.content.summary || "";
-                            msg.sql = event.content.sql;
-                            msg.chartOption = event.content.chartOption;
-                            break;
-                        case 'error':
-                            msg.content += `\n\n**Error:** ${event.content}`;
-                            msg.isError = true;
-                            break;
-                        case 'end':
-                            msg.isLoading = false;
-                            break;
-                    }
-                    
-                    newMessages[msgIndex] = msg;
-                    return newMessages;
-                });
-            },
-            (err) => {
-                console.error("Stream error", err);
-                toast.error("Failed to send message");
-                setMessages(prev => {
-                    const newMessages = [...prev];
-                    const msgIndex = newMessages.findIndex(m => String(m.id) === String(aiMsgId));
-                    if (msgIndex !== -1) {
-                        newMessages[msgIndex] = {
-                            ...newMessages[msgIndex],
-                            isLoading: false,
-                            isError: true,
-                            content: newMessages[msgIndex].content + `\n\n*(Error: ${err.message})*`
-                        };
-                    }
-                    return newMessages;
-                });
-                setIsStreaming(false);
-            },
-            () => {
-                setIsStreaming(false);
-                // If we were on "new" route, update to the actual session ID
-                if (!routeSessionId || routeSessionId === 'new') {
-                    navigate(`/chat/${sessionId}`, { replace: true });
-                }
+    const toggleListening = async () => {
+        if (isListening) {
+            // Stop recording
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+                mediaRecorderRef.current.stop();
             }
-        );
-    } catch (error) {
-        console.error("Failed to start stream", error);
-        setIsStreaming(false);
-    }
-  };
+            return;
+        }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          handleSendMessage();
-      }
-  };
+        // Start recording
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mediaRecorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = mediaRecorder;
+            audioChunksRef.current = [];
 
-  // Auto-resize textarea
-  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      setInput(e.target.value);
-      e.target.style.height = 'auto';
-      e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
-  };
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) {
+                    audioChunksRef.current.push(e.data);
+                }
+            };
 
-  return (
-    <div className="flex-1 flex flex-col h-full bg-muted/10 min-w-0 relative">
-      {/* Top Bar */}
-      <div className="h-16 border-b border-border bg-background flex justify-between items-center px-4 md:px-6 flex-shrink-0 z-10 shadow-sm/50">
-         <div className="flex items-center gap-4">
-             <button 
-                onClick={onToggleLeftSidebar}
-                className="p-2 hover:bg-accent hover:text-accent-foreground rounded-md text-muted-foreground transition-colors"
-                title={isLeftSidebarOpen ? "Close Sidebar" : "Open Sidebar"}
-                aria-label={isLeftSidebarOpen ? t('sidebar.close') : t('sidebar.open')}
-             >
-                {isLeftSidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
-             </button>
+            mediaRecorder.onstart = () => {
+                setIsListening(true);
+                toast.success(t('chat.listening') || 'Listening...', { icon: '🎙️', duration: 2000 });
+            };
 
-             <div className="h-6 w-px bg-border mx-1 hidden md:block"></div>
+            mediaRecorder.onstop = async () => {
+                setIsListening(false);
+                stream.getTracks().forEach(track => track.stop()); // Clean up tracks
+                
+                if (audioChunksRef.current.length === 0) return;
 
-             <div className="flex flex-col">
-                <h1 className="font-semibold text-sm text-foreground">{t('chat.session')}</h1>
-                <span className="text-xs text-muted-foreground font-mono">{sessionId.slice(0, 8)}...</span>
-             </div>
-         </div>
-         <div className="flex items-center gap-1">
-             <button className="p-2 hover:bg-accent hover:text-accent-foreground rounded-md text-muted-foreground transition-colors" aria-label="Share">
-                <Share2 size={18} />
-             </button>
-             <button className="p-2 hover:bg-accent hover:text-accent-foreground rounded-md text-muted-foreground transition-colors" aria-label="More options">
-                <MoreVertical size={18} />
-             </button>
-         </div>
-      </div>
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' }); // We record in webm and let backend handle or we need a frontend converter. For now, sending as is, but we might need an AudioContext conversion if Xunfei strictly requires 16k PCM.
+                
+                // --- Conversion to 16kHz PCM ---
+                try {
+                    toast.loading(t('chat.recognizing') || 'Recognizing speech...', { id: 'speech-recognition' });
+                    
+                    const arrayBuffer = await audioBlob.arrayBuffer();
+                    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                    
+                    // Convert float32 to Int16
+                    const channelData = audioBuffer.getChannelData(0);
+                    const pcmData = new Int16Array(channelData.length);
+                    for (let i = 0; i < channelData.length; i++) {
+                        let s = Math.max(-1, Math.min(1, channelData[i]));
+                        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    
+                    const pcmBlob = new Blob([pcmData], { type: 'audio/pcm' });
+                    
+                    // Send to backend
+                    const result = await speechService.recognizeSpeech(pcmBlob);
+                    
+                    if (result.success && result.text) {
+                        setInput(prev => prev + (prev ? ' ' : '') + result.text);
+                        toast.success(t('chat.recognizeSuccess') || 'Recognized', { id: 'speech-recognition' });
+                    } else {
+                        toast.error(t('chat.recognizeEmpty') || 'No speech recognized', { id: 'speech-recognition' });
+                    }
+                } catch (error) {
+                    console.error('Speech recognition error', error);
+                    toast.error(t('chat.micError') || 'Microphone error', { id: 'speech-recognition' });
+                }
+            };
 
-      {/* Chat Area */}
-      <div className="flex-1 overflow-y-auto p-6 md:p-12 space-y-10 pb-40">
-        {isLoadingHistory ? (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
-                <Loader2 className="animate-spin text-primary" size={32} />
-                <p className="text-sm font-medium animate-pulse">{t('chat.loadingHistory')}</p>
-            </div>
-        ) : (
-            <>
-                {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground space-y-4">
-                <div className="w-16 h-16 bg-accent rounded-full flex items-center justify-center">
-                    <Box size={32} />
-                </div>
-                <p>{t('chat.startPrompt')}</p>
-                {(!selectedConnectionId || !selectedLlmConfigId) && (
-                    <div className="flex items-center gap-2 text-yellow-600 bg-yellow-50 px-3 py-2 rounded-md text-sm border border-yellow-200">
-                        <AlertCircle size={16} />
-                        {t('chat.configurePrompt')}
+            mediaRecorder.start();
+        } catch (error) {
+            console.error('Microphone access error:', error);
+            toast.error(t('chat.micPermissionDenied') || 'Microphone access denied');
+        }
+    };
+
+    // Initialize Session
+    const loadSessionHistory = useCallback(async (id: string) => {
+        try {
+            setIsLoadingHistory(true);
+            const session = await chatService.getSession(id);
+
+            // Map backend messages to frontend format
+            const mappedMessages: Message[] = session.messages.map(msg => ({
+                id: msg.id,
+                role: msg.role === 'system' ? 'ai' : msg.role, // Treat system as AI for now or hide it
+                content: msg.content,
+                thinking: msg.message_metadata?.thinking,
+                thinkingStatus: msg.message_metadata?.thinking ? 'completed' : undefined,
+                sql: msg.message_metadata?.sql_query,
+                chartOption: (msg.message_metadata?.chartOption || msg.message_metadata?.chart_data) as ChartOption, // 兼容旧数据 chart_data
+                timestamp: msg.created_at ? new Date(msg.created_at).getTime() : Date.now()
+            }));
+
+            setMessages(mappedMessages);
+            shouldAutoScroll.current = true;
+        } catch (error) {
+            console.error("Failed to load session", error);
+            toast.error(t('chat.loadHistoryError'));
+        } finally {
+            setIsLoadingHistory(false);
+        }
+    }, [t]);
+
+    useEffect(() => {
+        if (!routeSessionId || routeSessionId === 'new') {
+            setSessionId(crypto.randomUUID());
+            setMessages([]);
+        } else {
+            setSessionId(routeSessionId);
+            loadSessionHistory(routeSessionId);
+        }
+    }, [routeSessionId, loadSessionHistory]);
+
+    const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+        const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+        shouldAutoScroll.current = isAtBottom;
+    };
+
+    const scrollToBottom = useCallback((instant = false) => {
+        if (messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({
+                behavior: instant ? "auto" : "smooth",
+                block: "end"
+            });
+        }
+    }, []);
+
+    // Scroll on new message
+    useEffect(() => {
+        if (messages.length > 0) {
+            scrollToBottom(false);
+            shouldAutoScroll.current = true;
+        }
+    }, [messages.length, scrollToBottom]);
+
+    // Scroll on streaming updates
+    useEffect(() => {
+        if (isStreaming && shouldAutoScroll.current) {
+            requestAnimationFrame(() => {
+                if (messagesEndRef.current) {
+                    messagesEndRef.current.scrollIntoView({ behavior: "auto", block: "end" });
+                }
+            });
+        }
+    }, [messages, isStreaming]);
+
+    const handleSendMessage = async () => {
+        if (!input.trim() || isStreaming) return;
+
+        if (!selectedConnectionId || !selectedLlmConfigId) {
+            toast.error(t('chat.selectConnectionError'));
+            setSidebarView('settings');
+            if (!isLeftSidebarOpen) setIsLeftSidebarOpen(true);
+            return;
+        }
+
+        const currentInput = input;
+        const userMsg: Message = {
+            id: crypto.randomUUID(),
+            role: 'user',
+            content: currentInput,
+            timestamp: Date.now()
+        };
+
+        const aiMsgId = crypto.randomUUID();
+        const aiMsg: Message = {
+            id: aiMsgId,
+            role: 'ai',
+            content: '',
+            thinking: '',
+            thinkingStatus: 'idle',
+            isLoading: true,
+            timestamp: Date.now()
+        };
+
+        setMessages(prev => [...prev, userMsg, aiMsg]);
+        setInput("");
+        setIsStreaming(true);
+
+        if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto';
+        }
+
+        try {
+            await chatService.sendMessageStream(
+                {
+                    query: currentInput,
+                    connection_id: selectedConnectionId,
+                    llm_config_id: selectedLlmConfigId,
+                    session_id: sessionId,
+                    stream: true
+                },
+                (event) => {
+                    setMessages(prev => {
+                        const newMessages = [...prev];
+                        const msgIndex = newMessages.findIndex(m => String(m.id) === String(aiMsgId));
+                        if (msgIndex === -1) return prev;
+
+                        const msg = { ...newMessages[msgIndex] };
+
+                        if (event.type === 'thinking') {
+                            msg.thinking = (msg.thinking || '') + event.content;
+                            // Only set to thinking if not already completed or error to prevent status reversion
+                            if (msg.thinkingStatus !== 'completed' && msg.thinkingStatus !== 'error') {
+                                msg.thinkingStatus = 'thinking';
+                                msg.status = t('chat.status.thinking');
+                            }
+                        } else if (event.type === 'sql_generated') {
+                            msg.sql = event.content;
+                            msg.status = t('chat.status.sqlGenerated');
+                            if (msg.thinkingStatus === 'thinking') {
+                                msg.thinkingStatus = 'completed';
+                            }
+                            if (event.thought) {
+                                const separator = msg.sqlThought ? '\n\n---\n\n' : '';
+                                msg.sqlThought = (msg.sqlThought || '') + separator + event.thought;
+                            }
+                        } else if (event.type === 'status') {
+                            msg.status = event.content;
+                        } else if (event.type === 'execution_result') {
+                            msg.executionResult = event.content;
+                            msg.status = t('chat.status.querying');
+                        } else if (event.type === 'chart_parse_error') {
+                            // 图表解析失败降级处理
+                            msg.chartOption = undefined;
+                            msg.content = (msg.content || '') + '\n\n⚠️ ' + event.content;
+                            msg.status = t('chat.status.chartError');
+                            toast.error(event.content);
+                        } else if (event.type === 'final_answer') {
+                            // 收到最终回答时，替换（而不是追加）content，清除之前的错误
+                            msg.content = event.content;
+                            if (event.sql) msg.sql = event.sql;
+                            if (event.thinking) msg.thinking = event.thinking;
+                            msg.chartOption = event.chartOption;
+                            msg.status = undefined;
+                            msg.isLoading = false;        // ✅ 关键修复：结束加载状态
+                            msg.isError = false;          // 清除错误状态
+                            msg.retryErrors = undefined;  // 清除重试错误
+                            if (msg.thinkingStatus === 'thinking' || msg.thinkingStatus === 'idle') {
+                                msg.thinkingStatus = 'completed';
+                            }
+                        } else if (event.type === 'error') {
+                            let errorMsg = event.content;
+                            if (errorMsg === 'Global Processing Error') {
+                                errorMsg = t('errors.globalException');
+                            } else if (errorMsg.startsWith('Global Processing Error:')) {
+                                errorMsg = t('errors.globalException') + errorMsg.substring('Global Processing Error'.length);
+                            }
+                            if (event.done) {
+                                // done=true 的 error 是终态错误，直接显示
+                                msg.isLoading = false;
+                                msg.isError = true;
+                                msg.thinkingStatus = 'error';
+                                msg.content = errorMsg;
+                                msg.status = undefined;
+                            } else {
+                                // done=false 的 error 是中间重试错误，收集到 retryErrors
+                                if (!msg.retryErrors) msg.retryErrors = [];
+                                msg.retryErrors.push(errorMsg);
+                                msg.status = t('chat.status.retrying');
+                            }
+                        } else if (event.type === 'end') {
+                            msg.isLoading = false;
+                            msg.status = undefined;
+
+                            // Ensure thinking stops when stream ends
+                            if (msg.thinkingStatus === 'thinking') {
+                                msg.thinkingStatus = 'completed';
+                            }
+
+                            // 如果有重试错误但没有正常内容，标记为最终错误
+                            if (msg.retryErrors?.length && !msg.content) {
+                                msg.isError = true;
+                                msg.thinkingStatus = 'error';
+                                msg.content = msg.retryErrors[msg.retryErrors.length - 1];
+                            }
+                        } else if (event.type === 'execution_time') {
+                            // 处理执行时间
+                            msg.executionTime = event.content as string;
+                            msg.executionSeconds = event.seconds;
+                        }
+
+                        newMessages[msgIndex] = msg;
+                        return newMessages;
+                    });
+                },
+                (err) => {
+                    console.error("Stream error", err);
+                    toast.error(t('chat.sendMessageError'));
+
+                    let displayError = err.message;
+                    if (displayError.includes('Error processing request') || displayError.includes('Failed to fetch') || displayError === 'Global Processing Error') {
+                        displayError = t('errors.globalException');
+                    }
+
+                    setMessages(prev => {
+                        const newMessages = [...prev];
+                        const msgIndex = newMessages.findIndex(m => String(m.id) === String(aiMsgId));
+                        if (msgIndex !== -1) {
+                            newMessages[msgIndex] = {
+                                ...newMessages[msgIndex],
+                                isLoading: false,
+                                isError: true,
+                                thinkingStatus: 'error',
+                                content: newMessages[msgIndex].content + `\n\n*(系统提示: ${displayError})*`
+                            };
+                        }
+                        return newMessages;
+                    });
+                    setIsStreaming(false);
+                },
+                () => {
+                    setIsStreaming(false);
+                    setMessages(prev => {
+                        const newMessages = [...prev];
+                        const msgIndex = newMessages.findIndex(m => String(m.id) === String(aiMsgId));
+                        if (msgIndex !== -1) {
+                            const msg = newMessages[msgIndex];
+                            if (msg.isLoading) {
+                                newMessages[msgIndex] = {
+                                    ...msg,
+                                    isLoading: false,
+                                    status: undefined
+                                };
+                            }
+                        }
+                        return newMessages;
+                    });
+
+                    if (!routeSessionId || routeSessionId === 'new') {
+                        navigate(`/chat/${sessionId}`, { replace: true });
+                    }
+                }
+            );
+        } catch (error) {
+            console.error("Failed to start stream", error);
+            setIsStreaming(false);
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSendMessage();
+        }
+    };
+
+    const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setInput(e.target.value);
+        e.target.style.height = 'auto';
+        e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
+    };
+
+    return (
+        <div className="flex-1 flex flex-col h-full bg-muted/10 min-w-0 relative">
+            <div className="h-16 flex justify-between items-center px-4 md:px-6 flex-shrink-0 z-10 bg-background/80 backdrop-blur-md sticky top-0">
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={onToggleLeftSidebar}
+                        className="p-2 hover:bg-muted rounded-full text-muted-foreground transition-colors"
+                        title={isLeftSidebarOpen ? "Close Sidebar" : "Open Sidebar"}
+                        aria-label={isLeftSidebarOpen ? t('sidebar.close') : t('sidebar.open')}
+                    >
+                        {isLeftSidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
+                    </button>
+
+                    <div className="flex items-center gap-2 px-2">
+                        <span className="font-medium text-lg text-foreground flex items-center gap-2">
+                            KY Data Pilot <span className="text-muted-foreground text-sm font-normal opacity-50">Pro</span>
+                        </span>
                     </div>
+                </div>
+                <div className="flex items-center gap-1">
+                    <div className="hidden md:block">
+                        <ModelSelector onOpenSettings={() => {
+                            setSidebarView('settings');
+                            if (!isLeftSidebarOpen) setIsLeftSidebarOpen(true);
+                        }} />
+                    </div>
+                    <button className="p-2 hover:bg-muted rounded-full text-muted-foreground transition-colors" aria-label="Share">
+                        <Share2 size={18} />
+                    </button>
+                    <button className="p-2 hover:bg-muted rounded-full text-muted-foreground transition-colors" aria-label="More options">
+                        <MoreVertical size={18} />
+                    </button>
+                </div>
+            </div>
+
+            <div
+                className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8 pb-40 scroll-smooth"
+                onScroll={handleScroll}
+            >
+                {isLoadingHistory ? (
+                    <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
+                        <Loader2 className="animate-spin text-primary" size={32} />
+                        <p className="text-sm font-medium animate-pulse">{t('chat.loadingHistory')}</p>
+                    </div>
+                ) : (
+                    <>
+                        {messages.length === 0 && (
+                            <div className={`flex flex-col items-center justify-center h-full ${CONTAINER_CLASS}`}>
+                                <div className="text-left w-full mb-10 animate-fade-in-up">
+                                    <h1 className="text-4xl md:text-5xl font-semibold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-purple-500 to-pink-500 mb-3">
+                                        {t('intro.title')}
+                                    </h1>
+                                    <p className="text-lg text-muted-foreground/60">
+                                        {t('intro.subtitle')}
+                                    </p>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 w-full animate-fade-in-up delay-100">
+                                    {[
+                                        { key: 'sales', icon: TrendingUp, color: "from-blue-500/10 to-blue-600/5 hover:border-blue-300 dark:hover:border-blue-700" },
+                                        { key: 'customer', icon: BarChart3, color: "from-purple-500/10 to-purple-600/5 hover:border-purple-300 dark:hover:border-purple-700" },
+                                        { key: 'material', icon: Package, color: "from-emerald-500/10 to-emerald-600/5 hover:border-emerald-300 dark:hover:border-emerald-700" },
+                                        { key: 'inventory', icon: Database, color: "from-amber-500/10 to-amber-600/5 hover:border-amber-300 dark:hover:border-amber-700" }
+                                    ].map((item) => (
+                                        <button
+                                            key={item.key}
+                                            onClick={() => setInput(t(`intro.examples.${item.key}.desc`))}
+                                            className={`flex flex-col gap-3 p-4 rounded-xl bg-gradient-to-br ${item.color} border border-border/50 transition-all text-left group hover:shadow-md hover:-translate-y-0.5 duration-200`}
+                                        >
+                                            <div className="p-2.5 bg-background/80 w-fit rounded-xl shadow-sm">
+                                                <item.icon size={18} className="text-primary" />
+                                            </div>
+                                            <div>
+                                                <p className="font-semibold text-foreground text-sm mb-0.5">{t(`intro.examples.${item.key}.label`)}</p>
+                                                <p className="text-xs text-muted-foreground leading-relaxed">{t(`intro.examples.${item.key}.desc`)}</p>
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {messages.map((msg) => (
+                            <ChatMessage key={msg.id} message={msg} containerClass={CONTAINER_CLASS} />
+                        ))}
+                        <div ref={messagesEndRef} />
+                    </>
                 )}
             </div>
-        )}
 
-        {messages.map((msg) => (
-            <div key={msg.id} className="flex flex-col gap-3 max-w-4xl mx-auto group">
-                <div className="flex items-center justify-between">
-                    <div className={`font-semibold text-sm ${msg.role === 'user' ? 'text-foreground' : 'text-primary flex items-center gap-2'}`}>
-                        {msg.role === 'user' ? t('chat.user') : (
+            <div className={`flex-shrink-0 p-4 bg-background z-20 ${CONTAINER_CLASS}`}>
+                <div className="relative flex items-end gap-2 bg-muted/50 hover:bg-muted/80 focus-within:bg-muted transition-colors rounded-[28px] p-2 border border-transparent focus-within:border-border/50 focus-within:shadow-md ring-offset-2 focus-within:ring-2 ring-primary/10">
+                    <button className="p-3 text-muted-foreground hover:text-primary hover:bg-background rounded-full transition-all flex-shrink-0" aria-label="Add image">
+                        <Plus size={20} />
+                    </button>
+
+                    <textarea
+                        ref={textareaRef}
+                        value={input}
+                        onChange={handleInput}
+                        onKeyDown={handleKeyDown}
+                        placeholder={t('chat.inputPlaceholder')}
+                        className="w-full py-3 bg-transparent border-none focus:outline-none focus:ring-0 resize-none min-h-[48px] max-h-[200px] text-base text-foreground placeholder:text-muted-foreground/70"
+                        rows={1}
+                        aria-label="Chat input"
+                    />
+
+                    <div className="flex items-center gap-1 pb-1.5 pr-2">
+                        {!input.trim() && (
                             <>
-                                <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center shadow-sm text-primary-foreground">
-                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-                                        <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z" />
-                                    </svg>
-                                </div>
-                                {t('chat.ai')}
+                                <button 
+                                    className="p-2 text-muted-foreground hover:text-primary hover:bg-background rounded-full transition-all" 
+                                    aria-label="Upload image"
+                                    onClick={() => toast(t('common.comingSoon') || 'Feature coming soon', { icon: '🚧' })}
+                                >
+                                    <ImageIcon size={20} />
+                                </button>
+                                <button 
+                                    className={`p-2 rounded-full transition-all ${isListening ? 'text-red-500 bg-red-100 dark:bg-red-900/30 animate-pulse' : 'text-muted-foreground hover:text-primary hover:bg-background'}`}
+                                    aria-label="Voice input"
+                                    onClick={toggleListening}
+                                >
+                                    <Mic size={20} />
+                                </button>
                             </>
                         )}
-                    </div>
-                    <div className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
-                        {new Date(msg.timestamp).toLocaleTimeString()}
+
+                        {input.trim() ? (
+                            <button
+                                onClick={handleSendMessage}
+                                disabled={isStreaming}
+                                aria-label="Send message"
+                                className="p-2 bg-primary text-primary-foreground rounded-full shadow-md hover:shadow-lg transition-all hover:scale-105 active:scale-95 flex items-center justify-center w-10 h-10"
+                            >
+                                {isStreaming ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} className="ml-0.5" />}
+                            </button>
+                        ) : (
+                            <button
+                                disabled
+                                className="p-2 text-muted-foreground/30 cursor-not-allowed rounded-full w-10 h-10 flex items-center justify-center"
+                            >
+                                <Send size={18} className="ml-0.5" />
+                            </button>
+                        )}
                     </div>
                 </div>
-
-                <div className={`text-sm leading-relaxed ${msg.role === 'user' ? 'bg-card border border-border p-4 rounded-lg shadow-sm text-card-foreground' : 'text-foreground'}`}>
-                    {msg.thoughts && msg.thoughts.length > 0 && (
-                        <div className="mb-4">
-                            <Collapsible.Root>
-                                <Collapsible.Trigger className="flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors w-full text-left p-2 bg-muted/50 rounded border border-transparent hover:border-border">
-                                    <ChevronRight size={14} className="transition-transform duration-200 data-[state=open]:rotate-90" />
-                                    {t('chat.thoughts')} ({msg.thoughts.length})
-                                </Collapsible.Trigger>
-                                <Collapsible.Content className="mt-2 space-y-2 pl-6 border-l-2 border-border">
-                                    {msg.thoughts.map((thought, idx) => (
-                                        <div key={idx} className="text-xs text-muted-foreground italic bg-muted/30 p-2 rounded">
-                                            {thought}
-                                        </div>
-                                    ))}
-                                </Collapsible.Content>
-                            </Collapsible.Root>
-                        </div>
-                    )}
-                    
-                    {msg.role === 'ai' ? (
-                        <>
-                             {msg.isLoading && !msg.content && !msg.sql && (
-                                <div className="flex items-center gap-2 text-muted-foreground italic">
-                                    <Loader2 size={14} className="animate-spin" />
-                                    {t('chat.thinking')}
-                                </div>
-                            )}
-                            {msg.content && (
-                                <div className="prose prose-sm max-w-none prose-slate dark:prose-invert">
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                                </div>
-                            )}
-                            {msg.sql && (
-                                <div className="mt-4 border border-border rounded-md overflow-hidden bg-muted">
-                                    <div className="bg-muted px-3 py-1.5 text-xs font-mono text-muted-foreground border-b border-border flex justify-between items-center">
-                                        <span>SQL Generated</span>
-                                        <button className="hover:text-primary transition-colors">Copy</button>
-                                    </div>
-                                    <pre className="p-3 overflow-x-auto text-xs font-mono text-foreground">
-                                        {msg.sql}
-                                    </pre>
-                                </div>
-                            )}
-                            {msg.chartOption && (
-                                <div className="mt-4 h-64 border border-border rounded-md bg-card p-2">
-                                    <ChartRenderer option={msg.chartOption} />
-                                </div>
-                            )}
-                            {msg.isError && (
-                                <div className="flex items-center gap-2 text-destructive text-xs mt-2 bg-destructive/10 p-2 rounded border border-destructive/20">
-                                    <AlertCircle size={14} />
-                                    <span>Error processing request</span>
-                                </div>
-                            )}
-                        </>
-                    ) : (
-                        msg.content
-                    )}
+                <div className="mt-3 text-center">
+                    <p className="text-[11px] text-muted-foreground/70">
+                        {t('chat.footer')}
+                    </p>
                 </div>
             </div>
-        ))}
-        <div ref={messagesEndRef} />
-      </>
-        )}
-      </div>
-
-      {/* Input Area */}
-      <div className="flex-shrink-0 p-4 md:p-6 bg-background border-t border-border z-20">
-        <div className="max-w-4xl mx-auto relative">
-            <div className="absolute left-3 top-3 text-muted-foreground">
-                <Search size={20} />
-            </div>
-            <textarea 
-                ref={textareaRef}
-                value={input}
-                onChange={handleInput}
-                onKeyDown={handleKeyDown}
-                placeholder={t('chat.inputPlaceholder')}
-                className="w-full pl-10 pr-12 py-3 bg-muted/30 border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-ring/20 focus:border-ring transition-all resize-none min-h-[50px] max-h-[200px] shadow-sm text-sm text-foreground placeholder:text-muted-foreground"
-                rows={1}
-                aria-label="Chat input"
-            />
-            <button 
-                onClick={handleSendMessage}
-                disabled={!input.trim() || isStreaming}
-                aria-label="Send message"
-                className={`absolute right-2 top-2 p-1.5 rounded-lg transition-all ${
-                    input.trim() && !isStreaming 
-                        ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-md hover:shadow-lg transform hover:-translate-y-0.5" 
-                        : "bg-muted text-muted-foreground cursor-not-allowed"
-                }`}
-            >
-                {isStreaming ? <Loader2 size={20} className="animate-spin" /> : <Play size={20} fill="currentColor" />}
-            </button>
         </div>
-        <div className="max-w-4xl mx-auto mt-2 text-center">
-            <p className="text-[10px] text-muted-foreground">
-                {t('chat.footer')}
-            </p>
-        </div>
-      </div>
-    </div>
-  );
+    );
 }

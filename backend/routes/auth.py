@@ -7,40 +7,47 @@
 # 调用认证工具库函数
 import logging
 from typing import Annotated
-from fastapi import APIRouter, HTTPException, Depends, status
-from sqlalchemy.ext.asyncio import AsyncSession
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict, EmailStr
 from sqlalchemy import select
-from pydantic import BaseModel, EmailStr, ConfigDict
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db  # ✅ 从 core 导入，解耦
 from models.user import User
-from utils.jwt_auth import create_access_token, get_current_user_id
+from utils.jwt_auth import create_access_token
 
 # 配置日志
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
 
 # === Pydantic V2 模型 ===
 class UserResponse(BaseModel):
     id: int
     username: str
     email: str
+    role: str
     token: str
 
     # 允许从 ORM 对象读取数据
     model_config = ConfigDict(from_attributes=True)
 
+
 class LoginRequest(BaseModel):
     username: str
     password: str
+
 
 class RegisterRequest(BaseModel):
     username: str
     email: EmailStr
     password: str
 
+
 # 定义常用依赖类型
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
 
 @router.post("/register", response_model=UserResponse)
 async def register(user_data: RegisterRequest, db: DbSession):
@@ -53,7 +60,7 @@ async def register(user_data: RegisterRequest, db: DbSession):
     new_user = User(
         username=user_data.username,
         email=user_data.email,
-        hashed_password=User.hash_password(user_data.password)
+        hashed_password=User.hash_password(user_data.password),
     )
 
     db.add(new_user)
@@ -68,8 +75,10 @@ async def register(user_data: RegisterRequest, db: DbSession):
         id=new_user.id,
         username=new_user.username,
         email=new_user.email,
-        token=token
+        role=new_user.role,
+        token=token,
     )
+
 
 @router.post("/login", response_model=UserResponse)
 async def login(credentials: LoginRequest, db: DbSession):
@@ -89,8 +98,5 @@ async def login(credentials: LoginRequest, db: DbSession):
     token = create_access_token(data={"sub": str(user.id)})
 
     return UserResponse(
-        id=user.id,
-        username=user.username,
-        email=user.email,
-        token=token
+        id=user.id, username=user.username, email=user.email, role=user.role, token=token
     )

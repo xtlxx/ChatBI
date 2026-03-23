@@ -1,7 +1,7 @@
 # ========================================
 # ChatBI Agent - 生产级依赖清单
-# Python 版本: 3.14.0
-# 最后更新: 2026-01-21
+# Python 版本: 3.13.0
+# 最后更新: 2026-02-24
 # ========================================
 
 # === 核心 Web 框架 ===
@@ -11,13 +11,15 @@ pydantic==2.12.5
 pydantic-settings==2.12.0
 starlette==0.38.6
 aioodbc>=0.5.0
+watchfiles>=0.24.0
 
 # === LangChain 生态系统 ===
 langchain==0.3.25
 langchain-core==0.3.63
 langchain-community==0.3.24
-langgraph==0.2.45
+langgraph==0.2.76
 langgraph-checkpoint==2.1.2
+langgraph-checkpoint-postgres>=3.0.4
 langsmith==0.1.143
 
 # === LLM 提供商 ===
@@ -29,8 +31,9 @@ anthropic==0.39.0
 langchain-openai==0.3.19
 openai==1.109.1
 
+
 # === 嵌入模型 ===
-voyageai==0.3.7
+voyageai==0.2.4
 
 # === 向量数据库 ===
 langchain-pinecone==0.2.13
@@ -41,9 +44,12 @@ pinecone-client==5.0.1
 sqlalchemy==2.0.36
 greenlet==3.3.0  # SQLAlchemy 异步支持所需
 aiomysql==0.2.0
+aiosqlite==0.19.0
 mysql-connector-python==9.1.0
 PyMySQL==1.1.2
 asyncpg==0.30.0  # PostgreSQL 异步支持
+psycopg-binary==3.3.3 # PostgreSQL binary driver for development
+psycopg-pool>=3.2.0   # PostgreSQL connection pool
 
 # === 认证和安全 ===
 python-jose[cryptography]==3.3.0
@@ -73,9 +79,11 @@ tenacity==9.0.0
 numpy==2.4.1
 tiktoken==0.12.0
 langchain-text-splitters==0.3.8
+sqlglot>=20.0.0
 
 # === 工具库 ===
 python-dotenv==1.0.1
+email-validator>=2.1.0
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
 orjson==3.11.5
@@ -86,6 +94,7 @@ cohere==5.11.2
 # === 开发工具 ===
 pytest==8.3.3
 pytest-asyncio==0.24.0
+pytest-cov==4.1.0
 black==24.10.0
 ruff==0.7.4
 mypy==1.13.0

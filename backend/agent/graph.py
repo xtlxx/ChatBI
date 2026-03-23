@@ -1,450 +1,934 @@
 # agent/graph.py
-import logging
-from typing import Literal, Dict, Any, List, cast
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
-from langgraph.graph import StateGraph, START, END
-from langgraph.prebuilt import ToolNode
+# 定义 ChatBIAgent 的状态图
+import ast
+import json
+import re
+from datetime import datetime
+from typing import Any, Literal
+
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.output_parsers import StrOutputParser
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
 
-# === 导入配置与工具 ===
-try:
-    # 生产环境：假设 config 在项目根目录，作为包的一部分运行
-    from config import settings
-    from logging_config import get_logger
-except ImportError:
-    # 开发环境/回退：尝试相对导入
-    try:
-        from ..config import settings
-        from ..logging_config import get_logger
-    except ImportError:
-        # 最后的兜底，仅用于防止 Import 错误导致 Crash
-        import logging
-        get_logger = logging.getLogger
-        class Settings:
-            ANTHROPIC_API_KEY = None
-            ANTHROPIC_MODEL = "claude-3-opus-20240229"
-            LLM_TEMPERATURE = 0
-            LLM_MAX_TOKENS = 4000
-            LLM_TIMEOUT = 30
-            ENABLE_STREAMING = True
-        settings = Settings()
+from core.db_adapter import AdapterFactory
+from logging_config import get_logger
+from models.db_connection import DbType
 
-# === 内部模块导入 ===
+from .prompts import (
+  RESPONSE_GEN_PROMPT,
+  SCHEMA_CONTEXT,
+  SQL_GEN_PROMPT,
+  THINKING_PROMPT,
+  format_few_shot_examples,
+  select_few_shot_examples,
+)
+from .schemas import GenerateResponseOutput, GenerateSQLOutput
 from .state import AgentState
-from .tools import create_tools
-from .prompts import get_system_prompt
-
-# === 条件导入 Anthropic ===
-try:
-    from langchain_anthropic import ChatAnthropic
-    ANTHROPIC_AVAILABLE = True
-except ImportError:
-    ChatAnthropic = None
-    ANTHROPIC_AVAILABLE = False
+from .tools import DatabaseTools, validate_and_format_sql
 
 logger = get_logger(__name__)
 
-
 class ChatBIAgent:
-    """ChatBI Agent - 基于 LangGraph 的 SQL 分析 Agent"""
+  def __init__(
+    self, db_engine, retriever=None, llm=None, checkpointer=None, db_type: DbType = DbType.mysql
+  ):
+    self.db_engine = db_engine
+    self.retriever = retriever
+    self.checkpointer = checkpointer if checkpointer else MemorySaver()
+    self.db_type = db_type
+    self.logger = get_logger(self.__class__.__name__)
 
-    def __init__(self, db_engine, retriever=None, llm=None):
-        """
-        初始化 Agent
+    if llm:
+      self.llm = llm
+    else:
+      raise ValueError("必须提供一个LLM实例给ChatBIAgent")
 
-        Args:
-            db_engine: 数据库引擎
-            retriever: 知识库检索器（可选）
-            llm: 预配置的 LLM 实例（可选）
-        """
-        self.db_engine = db_engine
-        self.retriever = retriever
-        self.logger = get_logger(self.__class__.__name__)
+    self.db_tools = DatabaseTools(db_engine, db_type=db_type)
+    self.adapter = AdapterFactory.get_adapter(db_type)
 
-        # 1. 初始化 LLM
-        if llm:
-            self.llm = llm
-        elif not ANTHROPIC_AVAILABLE or not settings.ANTHROPIC_API_KEY:
-            self.logger.warning(
-                "anthropic_api_key_missing",
-                message="ANTHROPIC_API_KEY 未设置或库不可用，使用 Mock LLM"
-            )
-            # 创建支持 bind_tools 的 Fake LLM
-            from langchain_community.llms.fake import FakeListLLM
+    self.logger.info(
+      "agent_initialized",
+      llm_type=type(self.llm).__name__,
+      db_type=db_type.value,
+      mode="optimized_state_management",
+      timestamp=datetime.now().isoformat()
+    )
 
-            class FakeLLMWithTools(FakeListLLM):
-                """支持 bind_tools 的 Fake LLM"""
-                def bind_tools(self, tools, **kwargs):
-                    return self
+    self.graph = self._create_graph()
 
-                async def ainvoke(self, input, *args, **kwargs):
-                    # 模拟一个简单的回复
-                    return AIMessage(content="[Mock] 这是一个模拟回复。请配置 ANTHROPIC_API_KEY 以获得真实响应。")
+  def _log_node_execution(self, node_name: str, state: AgentState, extra: dict = None):
+    """统一的节点执行日志记录"""
+    log_data = {
+      "node": node_name,
+      "session_id": state.get("session_id"),
+      "current_phase": state.get("current_phase", "unknown"),
+      "step_count": len(state.get("steps", [])),
+      "has_error": state.get("has_error", False),
+      "retry_counts": state.get("retry_counts", {})
+    }
+    if extra:
+      log_data.update(extra)
+    self.logger.info("node_execution", **log_data)
 
-            self.llm = FakeLLMWithTools(responses=["Mock Response"])
-        else:
-            self.llm = ChatAnthropic(
-                model=settings.ANTHROPIC_MODEL,
-                api_key=settings.ANTHROPIC_API_KEY,
-                temperature=settings.LLM_TEMPERATURE,
-                max_tokens=settings.LLM_MAX_TOKENS,
-                timeout=settings.LLM_TIMEOUT,
-                streaming=settings.ENABLE_STREAMING
-            )
 
-        # 2. 创建并绑定工具
-        self.tools = create_tools(db_engine, retriever)
-        self.llm_with_tools = self.llm.bind_tools(self.tools)
+  def _format_user_friendly_error(self, error_msg: str) -> str:
+    if not error_msg:
+      return "查询执行失败，请稍后重试"
+    error_msg = re.sub(r'\(Background on this error.*?\)', '', error_msg, flags=re.DOTALL)
+    error_msg = re.sub(r'\[SQL:.*?\]', '', error_msg, flags=re.DOTALL)
+    patterns = [
+      (r"Unknown column '([^']+)'", "字段 '{}' 不存在，请检查字段名是否正确"),
+      (r"Unknown table '([^']+)'", "表 '{}' 不存在，请检查表名是否正确"),
+      (r"Syntax error.*?near '([^']+)'", "SQL 语法错误，请检查查询语句"),
+      (r"Expression #\d+ of SELECT list is not in GROUP BY", "分组查询错误：SELECT 的字段必须在 GROUP BY 中或使用聚合函数"),
+      (r"Duplicate column name '([^']+)'", "字段名 '{}' 重复"),
+      (r"Division by zero", "除零错误，请检查计算逻辑"),
+      (r"User location is not supported", "当前地区不支持该 AI 模型服务，请切换模型或使用代理"),
+      (r"rate.?limit|too many requests|429", "AI 模型调用过于频繁，请稍后重试"),
+      (r"(401|authentication|unauthorized)", "AI 模型认证失败，请检查 API Key 配置"),
+      (r"(timeout|timed? ?out)", "AI 模型响应超时，请稍后重试"),
+      (r"(500|502|503|internal.?server.?error)", "AI 模型服务暂时不可用，请稍后重试"),
+      (r"context.?length|token.?limit|too.?long", "查询数据量过大，超出 AI 模型处理能力，请缩小查询范围"),
+      (r"Range of input length", "输入内容过长（Schema超过模型限制），请切换到支持长上下文的模型（如 GPT-4o / Qwen-Plus）"),
+    ]
+    for pattern, template in patterns:
+      match = re.search(pattern, error_msg, re.IGNORECASE)
+      if match:
+        if '{}' in template:
+          return template.format(match.group(1))
+        return template
+    first_line = error_msg.split('\n')[0].strip()
+    if 'Error:' in first_line:
+      first_line = first_line.split('Error:', 1)[1].strip()
+    if len(first_line) > 150:
+      first_line = first_line[:150] + "..."
+    return f"查询执行失败：{first_line}"
 
-        # 3. 创建状态图
-        self.graph = self._create_graph()
+  def _generate_simple_report(self, state: AgentState) -> dict[str, Any]:
+    try:
+      sql_result = state.get("execution_result", {}).get("data", [])
+      if not sql_result:
+        return {"content": "查询执行成功，但未能生成详细报告。"}
+      rows = sql_result
+      if not rows:
+        return {"content": "查询执行成功，但未返回任何数据。"}
+      columns = list(rows[0].keys()) if rows else []
+      max_rows = 10
+      table_md = f"| {' | '.join(columns)} |\n"
+      table_md += f"| {' | '.join(['---'] * len(columns))} |\n"
+      for row in rows[:max_rows]:
+        row_values = [row.get(col) for col in columns]
+        row_str = [str(item).replace("|", "\\|") for item in row_values]
+        table_md += f"| {' | '.join(row_str)} |\n"
+      if len(rows) > max_rows:
+        table_md += f"\n*... 共 {len(rows)} 条数据，仅显示前 {max_rows} 条 ...*"
+      content = f"### 数据查询结果 (自动生成)\n\n由于 AI 响应超时，以下是直接查询结果：\n\n{table_md}"
+      return {"content": content, "chart_option": None}
+    except Exception as e:
+      self.logger.error(f"Failed to generate simple report: {e}")
+      return {"content": "查询执行成功，但在生成备用报告时出错。", "chart_option": None}
 
-        self.logger.info(
-            "agent_initialized",
-            model=settings.ANTHROPIC_MODEL,
-            tool_count=len(self.tools)
+  def _create_graph(self) -> StateGraph:
+    """创建 LangGraph 状态图"""
+
+    # ────────────────────────────────────────────────
+    # 节点 0：Schema 检索
+    # ────────────────────────────────────────────────
+    async def retrieve_schema_node(state: AgentState) -> dict[str, Any]:
+      node_start = datetime.now()
+      try:
+        dialect_info = ""
+        if self.adapter:
+          date_func = self.adapter.get_date_format_function() or "DATE_FORMAT"
+          limit_syntax = self.adapter.get_limit_syntax() or "LIMIT 100"
+          dialect_info = (
+            f"\n### 数据库方言\n"
+            f"当前连接的数据库类型为: {self.db_type.value}\n"
+            f"日期处理建议: 使用 {date_func}\n"
+            f"分页语法示例: {limit_syntax}\n"
+          )
+
+        dynamic_tables = await self.db_tools.get_all_tables_info()
+
+        full_schema_context = (
+          f"{SCHEMA_CONTEXT}\n"
+          f"{dialect_info}\n"
+          f"### 当前数据库全量表列表\n{dynamic_tables}"
         )
 
-    def _create_graph(self) -> StateGraph:
-        """创建 LangGraph 状态图"""
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+        self._log_node_execution("retrieve_schema", state, {
+          "status": "success",
+          "duration_ms": duration_ms,
+          "context_length": len(full_schema_context)
+        })
 
-        # 创建 LangGraph 标准工具节点
-        tool_node = ToolNode(self.tools)
-
-        # --- 节点定义 ---
-
-        async def agent_node(state: AgentState) -> Dict[str, Any]:
-            """
-            Agent 核心推理节点
-            负责构建 Prompt 并调用 LLM
-            """
-            try:
-                current_messages = state.get("messages", [])
-                query = state.get("query", "")
-
-                self.logger.info("agent_reasoning", query=query, history_len=len(current_messages))
-
-                # --- 构建 Prompt ---
-                # 为了保持状态（State）的清洁，我们不把 System Prompt 永久写入 State 的 message list，
-                # 而是每次在调用 LLM 时临时构建一个新的 message list。
-
-                system_text = get_system_prompt()
-
-                # 增强指令：强制要求思考过程和格式
-                enhanced_instruction = """
-IMPORTANT: You MUST follow this strict 4-step format for your response:
-1. **Thought Process**: Explain your thinking, analyze the schema, and plan the query.
-2. **Decision**: State what you are going to do.
-3. **Execute SQL**: You MUST use the `execute_sql` tool. Do NOT just print the SQL code.
-4. **Report**: After getting the data, generate a summary and ECharts option.
-"""
-                system_message = SystemMessage(content=f"{system_text}\n{enhanced_instruction}")
-
-                # 检查历史消息中是否已经包含 SystemMessage (避免重复)
-                # 如果没有，则在本次推理的输入中临时添加
-                input_messages = list(current_messages)
-                if not input_messages or not isinstance(input_messages[0], SystemMessage):
-                    input_messages.insert(0, system_message)
-
-                # --- 调用 LLM ---
-                response = await self.llm_with_tools.ainvoke(input_messages)
-
-                # --- 返回结果 ---
-                # 关键修复：因为 State 定义中 messages 使用了 add_messages (append)
-                # 所以这里我们只返回 [新生成的消息]，而不是 [历史 + 新消息]
-                return {
-                    "messages": [response],
-                    "steps": ["agent_reasoning"] # 这里会追加到 steps 列表
-                }
-
-            except Exception as e:
-                self.logger.error("agent_reasoning_failed", error=str(e), exc_info=True)
-                # 返回错误信息给用户，而不是让程序崩溃
-                return {
-                    "messages": [AIMessage(content=f"抱歉，推理过程中发生错误: {str(e)}")],
-                    "error": f"Agent 推理失败: {str(e)}",
-                    "steps": ["agent_error"]
-                }
-
-        async def tools_node_wrapper(state: AgentState) -> Dict[str, Any]:
-            """
-            工具执行节点包装器
-            """
-            try:
-                self.logger.info("executing_tools")
-
-                # 调用 LangGraph 预置的 ToolNode
-                # 它会执行 last_message 中的 tool_calls，并返回 ToolMessages
-                result = await tool_node.ainvoke(state)
-
-                # result 格式为 {"messages": [ToolMessage, ...]}
-                return {
-                    "messages": result["messages"],
-                    "steps": ["tool_execution"]
-                }
-
-            except Exception as e:
-                self.logger.error("tool_execution_failed", error=str(e), exc_info=True)
-                return {
-                    "error": f"工具执行失败: {str(e)}",
-                    "steps": ["tool_error"]
-                }
-
-        def should_continue(state: AgentState) -> Literal["tools", "end"]:
-            """
-            条件边：决定下一步是继续执行工具还是结束
-            """
-            messages = state.get("messages", [])
-            if not messages:
-                return "end"
-
-            last_message = messages[-1]
-
-            # 检查最后一条消息是否有工具调用请求
-            if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-                return "tools"
-
-            return "end"
-
-        # --- 构建图结构 ---
-        workflow = StateGraph(AgentState)
-
-        # 添加节点
-        workflow.add_node("agent", agent_node)
-        workflow.add_node("tools", tools_node_wrapper)
-
-        # 添加边
-        workflow.add_edge(START, "agent")
-
-        # 添加条件边
-        workflow.add_conditional_edges(
-            "agent",
-            should_continue,
-            {
-                "tools": "tools",
-                "end": END
-            }
-        )
-
-        # 工具执行完后，必须回到 Agent 节点进行解释/总结
-        workflow.add_edge("tools", "agent")
-
-        # 添加持久化记忆
-        memory = MemorySaver()
-
-        return workflow.compile(checkpointer=memory)
-
-    async def ainvoke(
-        self,
-        query: str,
-        session_id: str = "default",
-        metadata: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
-        """
-        异步调用 Agent (入口)
-        """
-        try:
-            self.logger.info("agent_invoked", query=query, session_id=session_id)
-
-            # 初始化输入状态
-            # 注意：这里的 query 会被放入 state["query"]，
-            # 但我们需要明确地将用户的 query 转化为一条 HumanMessage 放入 messages
-            initial_inputs = {
-                "messages": [HumanMessage(content=query)],
-                "query": query,
-                "session_id": session_id,
-                "metadata": metadata or {},
-                # 初始化其他字段，防止 KeyError（虽然 TypedDict 允许缺省，但明确更好）
-                "steps": [],
-                "error": None
-            }
-
-            config = {"configurable": {"thread_id": session_id}}
-
-            # 执行图
-            result = await self.graph.ainvoke(initial_inputs, config)
-
-            # 提取结果
-            final_response = self._extract_final_answer(result)
-
-            self.logger.info(
-                "agent_completed",
-                session_id=session_id,
-                steps_count=len(result.get("steps", []))
-            )
-
-            return final_response
-
-        except Exception as e:
-            self.logger.error("agent_invocation_failed", error=str(e), exc_info=True)
-            return {
-                "summary": f"系统错误: {str(e)}",
-                "error": str(e),
-                "sql": None,
-                "chartOption": None
-            }
-
-    async def astream(
-        self,
-        query: str,
-        session_id: str = "default",
-        metadata: Dict[str, Any] = None
-    ):
-        """
-        异步流式调用 Agent
-        Yields: Delta updates or full state snapshots
-        """
-        try:
-            self.logger.info("agent_stream_started", query=query, session_id=session_id)
-
-            initial_inputs = {
-                "messages": [HumanMessage(content=query)],
-                "query": query,
-                "session_id": session_id,
-                "metadata": metadata or {},
-                "steps": []
-            }
-
-            config = {"configurable": {"thread_id": session_id}}
-
-            async for event in self.graph.astream(initial_inputs, config):
-                yield event
-
-            self.logger.info("agent_stream_completed", session_id=session_id)
-
-        except Exception as e:
-            self.logger.error("agent_stream_failed", error=str(e), exc_info=True)
-            yield {"error": str(e)}
-
-    def _extract_final_answer(self, state: AgentState) -> Dict[str, Any]:
-        """
-        从最终状态中提取标准化输出
-        """
-        messages = state.get("messages", [])
-
-        # 默认值
-        response = {
-            "summary": "未能生成有效回答",
-            "sql": None,
-            "chartOption": None,
-            "data": None,
-            "error": state.get("error")
+        return {
+          "current_phase": "retrieve_schema",
+          "schema_context": full_schema_context,
+          "steps": ["retrieve_schema"],
+          "timings": {**state.get("timings", {}), "retrieve_schema": duration_ms},
+          "has_error": False,
+          "last_error": None,
+          "fallback_used": False,
+        }
+      except Exception as e:
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+        self.logger.error("schema_retrieval_failed", error=str(e), duration_ms=duration_ms, exc_info=True)
+        return {
+          "current_phase": "retrieve_schema",
+          "schema_context": SCHEMA_CONTEXT,
+          "fallback_used": True,
+          "has_error": True,
+          "last_error": self._format_user_friendly_error(str(e)),
+          "error_phase": "retrieve_schema",
+          "steps": ["retrieve_schema_error"],
+          "timings": {**state.get("timings", {}), "retrieve_schema": duration_ms},
         }
 
-        if not messages:
-            return response
+    # ────────────────────────────────────────────────
+    # 节点 1：显式业务思考
+    # ────────────────────────────────────────────────
+    async def explicit_thinking_node(state: AgentState) -> dict[str, Any]:
+      node_start = datetime.now()
+      try:
+        if state.get("thinking"):
+          self._log_node_execution("explicit_thinking", state, {"status": "skipped"})
+          return {
+            "steps": ["explicit_thinking_skipped"],
+          }
 
-        # 1. 获取最后的 AI 回复
-        last_message = messages[-1]
-        if isinstance(last_message, AIMessage):
-            response["summary"] = last_message.content
-        elif isinstance(last_message, BaseMessage):
-            response["summary"] = str(last_message.content)
-        # 2. 倒序查找最近的一次 SQL 执行记录 (ToolMessage)
-        import json
-        from langchain_core.messages import ToolMessage
+        prompt_template = THINKING_PROMPT
+        chain = prompt_template | self.llm | StrOutputParser()
+        thinking_text = await chain.ainvoke({
+          "query": state["query"],
+          "messages": state["messages"],
+          "schema_context": state.get("schema_context", "")
+        })
 
-        # 倒序遍历消息
-        for msg in reversed(messages):
-            # 找到工具执行结果
-            if isinstance(msg, ToolMessage) and msg.name == "execute_sql":
-                try:
-                    # 工具返回的是 JSON 字符串，需要解析
-                    content = msg.content
-                    if isinstance(content, str):
-                        data_json = json.loads(content)
-                        if data_json.get("success"):
-                            response["data"] = data_json.get("data")
-                            # 如果 ToolMessage 没有保存 SQL，我们需要找调用它的那条 AIMessage
-                            # 但通常 execute_sql 的结果里最好包含执行的 SQL
-                            # 这里假设 execute_sql 返回结果没有包含原始 SQL，我们需要去 ToolCall 找
-                            pass
-                except Exception as e:
-                    self.logger.warning(f"解析 ToolMessage 失败: {e}")
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+        self._log_node_execution("explicit_thinking", state, {
+          "status": "success",
+          "duration_ms": duration_ms,
+          "thinking_length": len(thinking_text)
+        })
 
-            # 找到触发工具调用的 AI 消息，提取 SQL
-            if isinstance(msg, AIMessage) and msg.tool_calls:
-                for tool_call in msg.tool_calls:
-                    try:
-                        if tool_call.get("name") == "execute_sql":
-                            # 处理 args：可能是字典或 JSON 字符串
-                            args = tool_call.get("args")
-                            
-                            if isinstance(args, dict):
-                                # 直接是字典，正常获取
-                                response["sql"] = args.get("query")
-                            elif isinstance(args, str):
-                                # 是字符串，尝试解析为 JSON
-                                try:
-                                    args_dict = json.loads(args)
-                                    response["sql"] = args_dict.get("query")
-                                except json.JSONDecodeError:
-                                    self.logger.warning(f"无法解析 tool_call args: {args}")
-                            else:
-                                self.logger.warning(f"未知的 args 类型: {type(args)}")
-                            
-                            # 找到最近的一个 SQL 就可以停止了
-                            if response["data"]:
-                                break
-                    except Exception as e:
-                        self.logger.warning(f"提取 SQL 失败: {e}")
-                        continue
+        return {
+          "current_phase": "explicit_thinking",
+          "thinking": thinking_text.strip(),
+          "steps": ["explicit_thinking"],
+          "timings": {**state.get("timings", {}), "explicit_thinking": duration_ms},
+          "has_error": False,
+          "last_error": None,
+        }
+      except Exception as e:
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+        self.logger.error("explicit_thinking_failed", error=str(e), duration_ms=duration_ms, exc_info=True)
+        return {
+          "current_phase": "explicit_thinking",
+          "thinking": None,
+          "has_error": True,
+          "last_error": self._format_user_friendly_error(str(e)),
+          "error_phase": "explicit_thinking",
+          "steps": ["explicit_thinking_error"],
+          "timings": {**state.get("timings", {}), "explicit_thinking": duration_ms},
+        }
 
-            # 如果 SQL 和 Data 都找到了，就退出循环
-            if response["sql"] and response["data"]:
-                break
-        # 3. 尝试提取图表配置（支持多种格式）
-        import re
-        if response["summary"]:
-            chart_json = None
-            
-            # 方法1: 匹配 markdown 代码块中的 JSON
-            # 支持 ```json ... ``` 或 ```echarts ... ``` 或单纯的 ```{...}```
-            pattern1 = r"```(?:json|echarts)?\s*(\{.*?\})\s*```"
-            match1 = re.search(pattern1, response["summary"], re.DOTALL)
-            if match1:
-                try:
-                    chart_json = json.loads(match1.group(1))
-                    self.logger.info("从 markdown 代码块提取图表配置")
-                except:
-                    pass
-            
-            # 方法2: 匹配 Analysis: 标签后的 JSON （Qwen 常用格式）
-            if not chart_json:
-                pattern2 = r"Analysis:\s*(\{[^`]*?\})"
-                match2 = re.search(pattern2, response["summary"], re.DOTALL)
-                if match2:
-                    try:
-                        # 清理可能的额外空白和换行
-                        json_str = match2.group(1).strip()
-                        chart_json = json.loads(json_str)
-                        self.logger.info("从 Analysis 标签提取图表配置")
-                    except Exception as e:
-                        self.logger.warning(f"解析 Analysis JSON 失败: {e}")
-            
-            # 方法3: 在整个响应中查找任何看起来像 ECharts 配置的 JSON
-            if not chart_json:
-                # 查找包含 series 或 xAxis 的 JSON 对象
-                pattern3 = r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*(?:\"series\"|\"xAxis\"|\"yAxis\")[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"
-                matches3 = re.findall(pattern3, response["summary"], re.DOTALL)
-                for match_str in matches3:
-                    try:
-                        chart_json = json.loads(match_str)
-                        if "series" in chart_json or "xAxis" in chart_json:
-                            self.logger.info("从响应文本提取图表配置")
-                            break
-                    except:
-                        continue
-            
-            # 如果成功提取到图表配置，进行验证和存储
-            if chart_json:
-                # 简单的特征检查，确认是 ECharts 配置
-                if isinstance(chart_json, dict) and ("series" in chart_json or "xAxis" in chart_json or "yAxis" in chart_json):
-                    response["chartOption"] = chart_json
-                    chart_type = "unknown"
-                    if chart_json.get("series") and len(chart_json["series"]) > 0:
-                        chart_type = chart_json["series"][0].get("type", "unknown")
-                    self.logger.info(f"成功提取图表配置，类型: {chart_type}")
-                    # 可选：从 summary 中移除 JSON，让回复更干净
-                    # response["summary"] = re.sub(pattern1, "", response["summary"], flags=re.DOTALL).strip()
-        return response
+    # ────────────────────────────────────────────────
+    # 节点 2：生成 SQL (🌟移除 @retry，拥抱状态循环🌟)
+    # ────────────────────────────────────────────────
+    async def generate_sql_node(state: AgentState) -> dict[str, Any]:
+      node_start = datetime.now()
+      query = state["query"]
+      retry_count = state["retry_counts"].get("generate_sql", 0)
+
+      try:
+        full_schema_context = state.get("schema_context")
+        if not full_schema_context:
+          full_schema_context = SCHEMA_CONTEXT
+          fallback_used = True
+        else:
+          fallback_used = False
+
+        # 移除手动拼接 error_context 到 query 的逻辑
+        # 改为通过 messages 历史传递详细错误信息，让 LLM 自我纠错
+        
+        selected_examples = select_few_shot_examples(state["query"], max_examples=3, mode="sql")
+        few_shot_examples_text = format_few_shot_examples(selected_examples)
+
+        structured_llm = self.llm.with_structured_output(GenerateSQLOutput)
+        prompt_template = SQL_GEN_PROMPT
+        chain = prompt_template | structured_llm
+
+        result = await chain.ainvoke(
+          {
+            "query": query,
+            "messages": state["messages"],
+            "schema_context": full_schema_context,
+            "few_shot_examples": few_shot_examples_text,
+          }
+        )
+
+        if not isinstance(result, GenerateSQLOutput):
+          self.logger.warning(f"意外的输出类型: {type(result)}")
+          if isinstance(result, dict):
+             result = GenerateSQLOutput(**result)
+
+        clean_sql = result.sql
+        thought = result.thought
+
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+        self._log_node_execution("generate_sql", state, {
+          "status": "success",
+          "duration_ms": duration_ms,
+          "sql_length": len(clean_sql)
+        })
+
+        return {
+          "current_phase": "generate_sql",
+          "sql_attempt": {
+            "query": clean_sql,
+            "thought": thought,
+            "generated_at": datetime.now().isoformat(),
+            "attempt": retry_count + 1
+          },
+          "retry_counts": {**state["retry_counts"], "generate_sql": retry_count + 1},
+          "timings": {**state.get("timings", {}), "generate_sql": duration_ms},
+          "steps": ["generate_sql"],
+          "has_error": False,
+          "last_error": None,
+          "fallback_used": state.get("fallback_used", False) or fallback_used,
+        }
+      except Exception as e:
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+        is_fatal = any(x in str(e) for x in ["Range of input length", "context length exceeded", "InvalidParameter"])
+        retry_increment = 3 if is_fatal else 1
+        friendly_error = self._format_user_friendly_error(str(e))
+        self.logger.error("sql_generation_failed", error=str(e), is_fatal=is_fatal, duration_ms=duration_ms, exc_info=True)
+
+        # 🌟 关键修复：将详细错误回传给 State 的 messages，触发 Self-Correction
+        error_feedback_msg = HumanMessage(
+            content=f"Structured Output Validation Failed (Attempt {retry_count + 1}): {str(e)}. "
+                    f"Please analyze the schema definition and fix your output format."
+        )
+
+        return {
+          "current_phase": "generate_sql",
+          "sql_attempt": None,
+          "has_error": True,
+          "last_error": friendly_error, # UI展示用友好错误
+          "error_phase": "generate_sql",
+          "retry_counts": {**state["retry_counts"], "generate_sql": retry_count + retry_increment},
+          "steps": ["generate_sql_error"],
+          "timings": {**state.get("timings", {}), "generate_sql": duration_ms},
+          "messages": [error_feedback_msg] # 追加错误反馈
+        }
+
+    # ────────────────────────────────────────────────
+    # 节点 3：验证 SQL
+    # ────────────────────────────────────────────────
+    async def validate_sql_node(state: AgentState) -> dict[str, Any]:
+      node_start = datetime.now()
+      try:
+        if state.get("has_error"):
+           self._log_node_execution("validate_sql", state, {"status": "skipped_due_to_error"})
+           return {
+            "validation_result": {"is_valid": False, "issues": ["Skipped due to prior error"], "message": "跳过验证"},
+            "steps": ["validate_sql_skip_due_to_error"],
+           }
+
+        sql = state.get("sql_attempt", {}).get("query", "")
+        if not sql:
+          raise ValueError("No SQL query to validate")
+
+        error = None
+        try:
+            dialect = getattr(self.adapter, "sqlglot_dialect", "postgres") if hasattr(self, "adapter") and self.adapter else "postgres"
+            validate_and_format_sql(sql, dialect=dialect)
+        except ValueError as e:
+            error = str(e)
+
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+
+        if error:
+          self._log_node_execution("validate_sql", state, {
+            "status": "failed",
+            "duration_ms": duration_ms,
+            "error_type": "safety_violation"
+          })
+          
+          # 🌟 关键修复：将 SQL 校验错误回传给 State 的 messages
+          error_feedback_msg = HumanMessage(
+              content=f"SQL Safety Validation Failed: {error}. Please fix the SQL query to comply with safety rules."
+          )
+          
+          return {
+            "current_phase": "validate_sql",
+            "validation_result": {"is_valid": False, "issues": [error], "message": "SQL 安全校验失败"},
+            "retry_counts": {**state["retry_counts"], "generate_sql": state["retry_counts"].get("generate_sql", 0) + 1},  # 验证失败计入生成重试
+            "has_error": True,
+            "last_error": error,
+            "error_phase": "validate_sql",
+            "steps": ["validate_sql_fail"],
+            "timings": {**state.get("timings", {}), "validate_sql": duration_ms},
+            "messages": [error_feedback_msg] # 追加错误反馈
+          }
+
+        self._log_node_execution("validate_sql", state, {
+          "status": "success",
+          "duration_ms": duration_ms
+        })
+
+        return {
+          "current_phase": "validate_sql",
+          "validation_result": {"is_valid": True, "issues": [], "message": "SQL 通过校验"},
+          "steps": ["validate_sql_pass"],
+          "timings": {**state.get("timings", {}), "validate_sql": duration_ms},
+          "has_error": False,
+          "last_error": None,
+        }
+      except Exception as e:
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+        self.logger.error("validate_sql_exception", error=str(e), duration_ms=duration_ms, exc_info=True)
+        
+        error_feedback_msg = HumanMessage(
+            content=f"SQL Validation Exception: {str(e)}. Please fix the SQL."
+        )
+        
+        return {
+          "current_phase": "validate_sql",
+          "validation_result": {"is_valid": False, "issues": [str(e)], "message": "SQL 验证异常"},
+          "has_error": True,
+          "last_error": self._format_user_friendly_error(str(e)),
+          "error_phase": "validate_sql",
+          "retry_counts": {**state["retry_counts"], "generate_sql": state["retry_counts"].get("generate_sql", 0) + 1},
+          "steps": ["validate_sql_exception"],
+          "timings": {**state.get("timings", {}), "validate_sql": duration_ms},
+          "messages": [error_feedback_msg] # 追加错误反馈
+        }
+
+    # ────────────────────────────────────────────────
+    # 节点 4：执行 SQL
+    # ────────────────────────────────────────────────
+    async def execute_sql_node(state: AgentState) -> dict[str, Any]:
+      node_start = datetime.now()
+      sql = state.get("sql_attempt", {}).get("query", "")
+      try:
+        result_json_str = await self.db_tools.execute_sql_query(sql)
+        result_data = json.loads(result_json_str)
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+
+        if "error" in result_data:
+          self._log_node_execution("execute_sql", state, {
+            "status": "failed",
+            "duration_ms": duration_ms,
+            "error_type": "execution_error"
+          })
+          return {
+            "current_phase": "execute_sql",
+            "execution_result": {"data": None, "row_count": 0, "truncated": False, "error": result_data["error"]},
+            "has_error": True,
+            "last_error": self._format_user_friendly_error(result_data["error"]),
+            "error_phase": "execute_sql",
+            "retry_counts": {**state["retry_counts"], "execute_sql": state["retry_counts"].get("execute_sql", 0) + 1},
+            "steps": ["execute_sql_fail"],
+            "timings": {**state.get("timings", {}), "execute_sql": duration_ms},
+            "messages": [HumanMessage(content=f"SQL 执行失败: {result_data['error']}。请修正 SQL 并重试。")],
+          }
+
+        self._log_node_execution("execute_sql", state, {
+          "status": "success",
+          "duration_ms": duration_ms,
+          "row_count": result_data.get("row_count", 0)
+        })
+
+        return {
+          "current_phase": "execute_sql",
+          "execution_result": {
+            "data": result_data.get("data", []),
+            "row_count": result_data.get("row_count", 0),
+            "truncated": result_data.get("truncated", False),
+            "error": None
+          },
+          "steps": ["execute_sql_success"],
+          "timings": {**state.get("timings", {}), "execute_sql": duration_ms},
+          "has_error": False,
+          "last_error": None,
+        }
+      except Exception as e:
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+        self.logger.error("execute_sql_exception", error=str(e), duration_ms=duration_ms, exc_info=True)
+        return {
+          "current_phase": "execute_sql",
+          "execution_result": {"data": None, "row_count": 0, "truncated": False, "error": str(e)},
+          "has_error": True,
+          "last_error": self._format_user_friendly_error(str(e)),
+          "error_phase": "execute_sql",
+          "retry_counts": {**state["retry_counts"], "execute_sql": state["retry_counts"].get("execute_sql", 0) + 1},
+          "steps": ["execute_sql_exception"],
+          "timings": {**state.get("timings", {}), "execute_sql": duration_ms},
+          "messages": [HumanMessage(content=f"SQL 执行异常: {str(e)}。请修正 SQL 并重试。")],
+        }
+
+    # ────────────────────────────────────────────────
+    # 节点 5：生成最终响应 (🌟 重构：使用 Structured Output)
+    # ────────────────────────────────────────────────
+    async def generate_response_node(state: AgentState) -> dict[str, Any]:
+      node_start = datetime.now()
+      try:
+        # 使用 Structured Output 强制返回 Pydantic 对象
+        structured_llm = self.llm.with_structured_output(GenerateResponseOutput)
+        prompt_template = RESPONSE_GEN_PROMPT
+        chain = prompt_template | structured_llm
+
+        selected_examples = select_few_shot_examples(state["query"], max_examples=2, mode="response")
+        few_shot_examples_text = format_few_shot_examples(selected_examples)
+
+        self.logger.info("generate_response_start",
+          query=state["query"],
+          sql_result_length=len(str((state.get("execution_result") or {}).get("data", []))),
+          has_few_shot=bool(few_shot_examples_text))
+
+        import asyncio
+        fallback_used = False
+        try:
+          # 增加超时控制
+          result_obj = await asyncio.wait_for(
+            chain.ainvoke(
+              {
+                "query": state["query"],
+                "sql_query": (state.get("sql_attempt") or {}).get("query", ""),
+                "sql_result": json.dumps(
+                    (state.get("execution_result") or {}).get("data", []),
+                    ensure_ascii=False, default=str
+                ),
+                "messages": state["messages"],
+                "few_shot_examples": few_shot_examples_text,
+              }
+            ),
+            timeout=180.0
+          )
+        except TimeoutError:
+          self.logger.warning("response_generation_timeout", duration_ms=180000)
+          simple_report = self._generate_simple_report(state)
+          # 构造一个临时的 GenerateResponseOutput 对象
+          result_obj = GenerateResponseOutput(
+              content=simple_report["content"],
+              chart_option=None
+          )
+          fallback_used = True
+        except Exception as e:
+           # 捕获 chain 调用失败 (如解析错误)
+           raise e
+        else:
+          fallback_used = False
+
+        if not isinstance(result_obj, GenerateResponseOutput):
+            # 兜底：如果 LLM 返回了 dict
+             if isinstance(result_obj, dict):
+                 result_obj = GenerateResponseOutput(**result_obj)
+             else:
+                 raise ValueError(f"Unexpected response type: {type(result_obj)}")
+
+        # 提取字段
+        content = result_obj.content
+        chart_config = result_obj.chart_option
+        
+        # 转换为 dict 用于前端 (Pydantic model_dump)
+        chart_dict = chart_config.model_dump(exclude_none=True) if chart_config else None
+
+        response_message = AIMessage(content=content)
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+
+        self._log_node_execution("generate_response", state, {
+          "status": "success",
+          "duration_ms": duration_ms,
+          "content_length": len(content),
+          "has_chart": bool(chart_dict)
+        })
+
+        return {
+          "current_phase": "generate_response",
+          "final_output": {
+            "content": content,
+            "chart_option": chart_dict,
+            "summary": content[:200] + "..." if len(content) > 200 else content,
+            "generated_at": datetime.now().isoformat()
+          },
+          "messages": [response_message],
+          "steps": ["generate_response"],
+          "timings": {**state.get("timings", {}), "generate_response": duration_ms},
+          "has_error": False,
+          "last_error": None,
+          "fallback_used": state.get("fallback_used", False) or fallback_used,
+        }
+      except Exception as e:
+        duration_ms = (datetime.now() - node_start).total_seconds() * 1000
+        friendly_error = self._format_user_friendly_error(str(e))
+        self.logger.error("response_generation_failed", error=str(e), duration_ms=duration_ms, exc_info=True)
+        return {
+          "current_phase": "generate_response",
+          "final_output": None,
+          "messages": [AIMessage(content=friendly_error)], # 🌟优化：依赖于 add_messages 只需返回新的 list 即可
+          "has_error": True,
+          "last_error": friendly_error,
+          "error_phase": "generate_response",
+          "steps": ["generate_response_error"],
+          "timings": {**state.get("timings", {}), "generate_response": duration_ms},
+        }
+
+    # --- 条件判断路由（利用新状态字段） ---
+    def route_after_retrieve_schema(state: AgentState) -> str:
+      if state.get("has_error"):
+        return END
+      return "explicit_thinking"
+
+    def route_after_thinking(state: AgentState) -> str:
+      if state.get("has_error"):
+        return END
+      return "generate_sql"
+
+    def route_after_generate_sql(state: AgentState) -> str:
+      if state.get("has_error"):
+        if state["retry_counts"].get("generate_sql", 0) >= 3:
+          return END
+        return "generate_sql"
+      return "validate_sql"
+
+    def route_after_validation(state: AgentState) -> str:
+      if state.get("has_error"):
+        if state["retry_counts"].get("generate_sql", 0) >= 3:
+          return END
+        return "generate_sql"
+      if state.get("validation_result", {}).get("is_valid", False):
+        return "execute_sql"
+      else:
+        if state["retry_counts"].get("generate_sql", 0) >= 3:
+          return END
+        return "generate_sql"
+
+    def route_after_execution(state: AgentState) -> str:
+      if state.get("has_error"):
+        if state["retry_counts"].get("execute_sql", 0) >= 2:
+          return END
+        return "generate_sql"  # 关键修复：执行失败应回退到生成阶段，而不是重试执行
+      if state.get("execution_result") and not state.get("execution_result").get("error"):
+        return "generate_response"
+      else:
+        if state["retry_counts"].get("execute_sql", 0) >= 2:
+          return END
+        return "generate_sql"
+
+    # route_after_response 已移除：generate_response 节点直接通过 add_edge 连接到 END
+
+    # --- 构建图 ---
+    workflow = StateGraph(AgentState)
+
+    workflow.add_node("retrieve_schema", retrieve_schema_node)
+    workflow.add_node("explicit_thinking", explicit_thinking_node)
+    workflow.add_node("generate_sql", generate_sql_node)
+    workflow.add_node("validate_sql", validate_sql_node)
+    workflow.add_node("execute_sql", execute_sql_node)
+    workflow.add_node("generate_response", generate_response_node)
+
+    workflow.add_edge(START, "retrieve_schema")
+    workflow.add_conditional_edges("retrieve_schema", route_after_retrieve_schema)
+    workflow.add_conditional_edges("explicit_thinking", route_after_thinking)
+    workflow.add_conditional_edges("generate_sql", route_after_generate_sql)
+    workflow.add_conditional_edges("validate_sql", route_after_validation)
+    workflow.add_conditional_edges("execute_sql", route_after_execution)
+    workflow.add_edge("generate_response", END)  # 最终节点直接结束，无需条件路由
+
+    return workflow.compile(checkpointer=self.checkpointer)
+
+  async def ainvoke(
+    self, query: str, session_id: str = "default", metadata: dict[str, Any] = None
+  ) -> dict[str, Any]:
+    try:
+      self.logger.info("agent_invoked", query=query, session_id=session_id)
+      metadata = metadata or {}
+      initial_inputs = {
+        "messages": [HumanMessage(content=query)],
+        "query": query,
+        "session_id": session_id,
+        "metadata": metadata,
+        "current_phase": "init",
+        "steps": [],
+        "retry_counts": {},
+        "has_error": False,
+        "last_error": None,
+        "error_phase": None,
+        "fallback_used": False,
+        "timings": {},
+        "schema_context": None,
+        "thinking": None,
+        "sql_attempt": None,
+        "validation_result": None,
+        "execution_result": None,
+        "final_output": None,
+      }
+      config = {"configurable": {"thread_id": session_id}}
+      result = await self.graph.ainvoke(initial_inputs, config)
+      final_response = self._extract_final_answer(result)
+      self.logger.info("agent_completed", session_id=session_id, timings=result.get("timings"))
+      return final_response
+    except Exception as e:
+      import traceback
+      traceback.print_exc()
+      self.logger.error("agent_invocation_failed", error=str(e), exc_info=True)
+      return {
+        "summary": f"系统错误: {str(e)}",
+        "error": str(e),
+        "sql": None,
+        "chartOption": None,
+        "thinking": None,
+      }
+
+  async def astream(
+    self, query: str, session_id: str = "default", metadata: dict[str, Any] = None
+  ):
+    try:
+      self.logger.info("agent_stream_started", query=query, session_id=session_id)
+
+      metadata = metadata or {}
+      initial_inputs = {
+        "messages": [HumanMessage(content=query)],
+        "query": query,
+        "session_id": session_id,
+        "metadata": metadata,
+        "current_phase": "init",
+        "steps": [],
+        "retry_counts": {},
+        "has_error": False,
+        "last_error": None,
+        "error_phase": None,
+        "fallback_used": False,
+        "timings": {},
+        "schema_context": None,
+        "thinking": None,
+        "sql_attempt": None,
+        "validation_result": None,
+        "execution_result": None,
+        "final_output": None,
+      }
+
+      config = {"configurable": {"thread_id": session_id}}
+
+      accumulated_thinking = ""
+      current_sql = None
+      last_phase = None
+      has_streamed_final_answer = False
+
+      yield {
+        "type": "status",
+        "content": "Agent 核心已启动",
+        "done": False
+      }
+
+      async for event in self.graph.astream_events(initial_inputs, config, version="v2"):
+        kind = event["event"]
+        node_name = event.get("metadata", {}).get("langgraph_node")
+
+        self.logger.info("graph_event", kind=kind, node=node_name)
+
+        if not node_name:
+          continue
+
+        # 利用 current_phase 统一处理状态通知
+        event_data = event.get("data", {})
+        if isinstance(event_data, dict):
+          output_data = event_data.get("output", {})
+          if isinstance(output_data, dict):
+            current_phase = output_data.get("current_phase", last_phase)
+          else:
+             current_phase = last_phase
+        else:
+           current_phase = last_phase
+        if current_phase != last_phase:
+          last_phase = current_phase
+          phase_messages = {
+            "retrieve_schema": "正在检索数据库结构...",
+            "explicit_thinking": "开始深度思考...",
+            "generate_sql": "正在生成 SQL 查询...",
+            "validate_sql": "正在校验 SQL 安全性...",
+            "execute_sql": "正在执行数据库查询...",
+            "generate_response": "正在生成最终分析报告...",
+            "completed": "处理完成！",
+            "failed": "处理失败，请稍后重试"
+          }
+          status_msg = phase_messages.get(current_phase, f"进入阶段: {current_phase}")
+          yield {
+            "type": "status",
+            "content": status_msg,
+            "done": False
+          }
+
+        # 1. 思考节点
+        if kind == "on_chat_model_stream" and node_name == "explicit_thinking":
+          chunk = event["data"]["chunk"]
+          content = chunk.content
+          if content:
+              accumulated_thinking += content
+              yield {
+                "type": "thinking",
+                "content": content,
+                "done": False
+              }
+        elif kind == "on_chain_end" and node_name == "explicit_thinking":
+          if accumulated_thinking:
+            self.logger.info(f"Explicit Thinking Process: {accumulated_thinking}")
+
+        # 2. SQL 生成节点
+        elif node_name == "generate_sql":
+          if kind == "on_chain_start":
+            yield {
+              "type": "status",
+              "content": "开始分析数据并生成 SQL...",
+              "done": False
+            }
+          elif kind == "on_chain_end":
+            node_data = event["data"]["output"]
+            if isinstance(node_data, dict) and "sql_attempt" in node_data:
+              sql_attempt = node_data.get("sql_attempt")
+              if sql_attempt:
+                current_sql = sql_attempt.get("query")
+                sql_thought = sql_attempt.get("thought", "")
+                yield {
+                  "type": "sql_generated",
+                  "content": current_sql,
+                  "thought": sql_thought,
+                  "done": False
+                }
+                if sql_thought:
+                  prefix = "\n\n**📊 数据策略分析：**\n" if accumulated_thinking else "**📊 数据策略分析：**\n"
+                  accumulated_thinking += prefix + sql_thought
+                  yield {
+                    "type": "thinking",
+                    "content": prefix + sql_thought,
+                    "done": False
+                  }
+
+        # 3. SQL 校验节点
+        elif kind == "on_chain_end" and node_name == "validate_sql":
+          node_data = event["data"]["output"]
+          if isinstance(node_data, dict) and "validation_result" in node_data:
+            validation = node_data.get("validation_result", {})
+            if validation.get("is_valid"):
+              yield {
+                "type": "status",
+                "content": "SQL 校验通过",
+                "done": False
+              }
+            else:
+              yield {
+                "type": "error",
+                "content": self._format_user_friendly_error(validation.get("message", "SQL 校验失败")),
+                "done": False
+              }
+
+        # 4. SQL 执行节点
+        elif kind == "on_chain_end" and node_name == "execute_sql":
+          node_data = event["data"]["output"]
+          if isinstance(node_data, dict) and "execution_result" in node_data:
+            exec_result = node_data.get("execution_result", {})
+            if exec_result.get("data") is not None:
+              row_count = exec_result.get("row_count", 0)
+              is_truncated = exec_result.get("truncated", False)
+              msg = f"查询成功，返回 {row_count} 条记录"
+              if is_truncated:
+                msg += " (已截断)"
+              yield {
+                "type": "execution_result",
+                "content": msg,
+                "done": False
+              }
+            elif exec_result.get("error"):
+              yield {
+                "type": "error",
+                "content": self._format_user_friendly_error(exec_result["error"]),
+                "done": False
+              }
+
+        # 5. 最终回答节点
+        elif node_name == "generate_response":
+          if kind == "on_chain_start":
+            self.logger.info("generate_response_node_started", session_id=session_id)
+          elif kind == "on_chain_end":
+            node_data = event["data"].get("output", {})
+            self.logger.info("generate_response_node_ended", session_id=session_id)
+            if isinstance(node_data, dict) and "final_output" in node_data:
+              final_out = node_data.get("final_output")
+              if final_out and not has_streamed_final_answer:
+                has_streamed_final_answer = True
+                yield {
+                  "type": "final_answer",
+                  "content": final_out.get("content", ""),
+                  "thinking": accumulated_thinking,
+                  "sql": current_sql,
+                  "chartOption": final_out.get("chart_option"),
+                  "done": True
+                }
+                self.logger.info("final_answer_sent", session_id=session_id, content_length=len(final_out.get("content", "")))
+              elif not final_out:
+                # 节点内部捕获了异常，返回 final_output: None，发送具体错误信息
+                err_detail = node_data.get("last_error", "报告生成失败，请重试")
+                self.logger.error("generate_response_failed_silently", session_id=session_id, error=err_detail)
+                yield {
+                  "type": "error",
+                  "content": err_detail,
+                  "done": True
+                }
+                has_streamed_final_answer = True  # 防止最后 fallback 重复发送
+          elif kind == "on_chain_error":
+            error_msg = event.get("data", {}).get("error", "未知错误")
+            self.logger.error("generate_response_node_error", session_id=session_id, error=error_msg)
+            yield {
+              "type": "error",
+              "content": f"报告生成失败：{self._format_user_friendly_error(error_msg)}",
+              "done": False
+            }
+
+      if not has_streamed_final_answer:
+        yield {
+          "type": "error",
+          "content": "未能生成有效回答 (可能由于重试次数过多或验证失败)",
+          "done": True
+        }
+
+      self.logger.info("agent_stream_completed", session_id=session_id)
+
+    except Exception as e:
+      import traceback
+      traceback.print_exc()
+      self.logger.error("agent_stream_failed", error=str(e), exc_info=True)
+      yield {
+        "type": "error",
+        "content": self._format_user_friendly_error(str(e)),
+        "done": True
+      }
+
+  def _extract_final_answer(self, state: AgentState) -> dict[str, Any]:
+    final_out = state.get("final_output", {})
+    exec_result = state.get("execution_result", {})
+    thinking = state.get("thinking", "")
+    sql_attempt = state.get("sql_attempt", {})
+    error = state.get("last_error") or state.get("has_error", False)
+
+    response = {
+      "summary": error if error else final_out.get("summary", "未能生成有效回答"),
+      "sql": sql_attempt.get("query", None),
+      "chartOption": final_out.get("chart_option", None),
+      "data": exec_result.get("data", None),
+      "thinking": thinking,
+      "error": state.get("last_error", None),
+    }
+
+    # 兼容旧逻辑：如果 messages 有内容，补充 summary
+    messages = state.get("messages", [])
+    if messages and not response["summary"]:
+      last_message = messages[-1]
+      if isinstance(last_message, AIMessage):
+        response["summary"] = last_message.content
+
+    return response

@@ -1,770 +1,421 @@
+# app.py
 """
 生产级 ChatBI Agent API
 基于 LangChain 0.1+ 和 LangGraph 构建的 SQL 分析 Agent
+适配最新的 ChatBIAgent 状态图架构
 """
-import sys
-import os
 import json
+import os
+import sys
 import time
-import uvicorn
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Optional, Dict, Any
+from datetime import UTC, date, datetime
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, Depends
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import uvicorn
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
+from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
-from sqlalchemy import text
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
-from prometheus_client import CollectorRegistry
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-# [优化] 创建新的 Registry 实例，避免与默认 Registry 混淆
-REGISTRY = CollectorRegistry()
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# 导入项目模块
-from config import settings
-from logging_config import get_logger
 from agent.graph import ChatBIAgent
-from agent.memory import ConversationMemoryManager
-from routes import auth_router, connections_router, llm_configs_router, chat_router
+from config import settings
+from core.database import AsyncSessionLocal
+from core.database import engine as db_engine  # 直接使用 core.database 已配置好的 engine
+from logging_config import get_logger
+from models.chat import ChatMessage, ChatSession
+from routes import auth_router, chat_router, connections_router, llm_configs_router, profile_router
+from routes.speech import router as speech_router
+from utils.agent_factory import agent_context
+from utils.engine_cache import EngineCache  # ✅ 导入 EngineCache 用于关机清理
+from utils.jwt_auth import get_current_user_id
 
-# 初始化日志
 logger = get_logger(__name__)
 
-# === Prometheus 指标 ===
-# Disable metrics in development to avoid duplicate registration errors
-if settings.ENABLE_METRICS and not os.getenv('DEV_MODE'):
-    REQUEST_COUNT = Counter(
-        'chatbi_requests_total',
-        'Total number of requests',
-        ['endpoint', 'method', 'status'],
-        registry=REGISTRY
-    )
-    REQUEST_DURATION = Histogram(
-        'chatbi_request_duration_seconds',
-        'Request duration in seconds',
-        ['endpoint'],
-        registry=REGISTRY
-    )
-    AGENT_EXECUTION_TIME = Histogram(
-        'chatbi_agent_execution_seconds',
-        'Agent execution time in seconds',
-        registry=REGISTRY
-    )
-    SQL_QUERY_COUNT = Counter(
-        'chatbi_sql_queries_total',
-        'Total number of SQL queries executed',
-        ['status'],
-        registry=REGISTRY
-    )
-else:
-    # Create dummy metrics for development
-    REQUEST_COUNT = None
-    REQUEST_DURATION = None
-    AGENT_EXECUTION_TIME = None
-    SQL_QUERY_COUNT = None
+agent_checkpointer: Any | None = None
+checkpoint_pool: AsyncConnectionPool | None = None
 
-# === 全局资源 ===
-db_engine: Optional[AsyncEngine] = None
-memory_manager: Optional[ConversationMemoryManager] = None
-
-
-# === Pydantic 模型 ===
+class SafeJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, date | datetime):
+            return obj.isoformat()
+        if hasattr(obj, "model_dump") and callable(obj.model_dump):
+            return obj.model_dump()
+        try:
+            return super().default(obj)
+        except TypeError:
+            return str(obj)
 
 class QueryRequest(BaseModel):
-    """查询请求模型"""
     query: str = Field(..., description="用户查询问题")
-    connection_id: Optional[int] = Field(default=None, description="数据库连接ID")
-    llm_config_id: Optional[int] = Field(default=None, description="LLM配置ID")
-    session_id: Optional[str] = Field(default="default", description="会话 ID")
+    connection_id: int | None = Field(default=None, description="数据库连接ID")
+    llm_config_id: int | None = Field(default=None, description="LLM配置ID")
+    session_id: str | None = Field(default="default", description="会话 ID")
     stream: bool = Field(default=False, description="是否使用流式响应")
-    metadata: Optional[Dict[str, Any]] = Field(default=None, description="额外的元数据")
-
+    metadata: dict[str, Any] | None = Field(default=None, description="额外的元数据")
 
 class QueryResponse(BaseModel):
-    """查询响应模型"""
-    summary: Optional[str] = Field(None, description="数据洞察摘要")
-    sql: Optional[str] = Field(None, description="执行的 SQL 查询")
-    chartOption: Optional[Dict[str, Any]] = Field(None, description="ECharts 配置")
-    error: Optional[str] = Field(None, description="错误信息")
+    summary: str | None = Field(None, description="数据洞察摘要")
+    thinking: str | None = Field(None, description="Agent的思考过程")
+    sql: str | None = Field(None, description="执行的 SQL 查询")
+    chartOption: dict[str, Any] | None = Field(None, description="ECharts 配置")  # noqa: N815
+    data: list[dict[str, Any]] | None = Field(None, description="查询结果数据")
+    error: str | None = Field(None, description="错误信息")
     session_id: str = Field(..., description="会话 ID")
-
+    execution_time: float | None = Field(None, description="执行耗时（秒）")
 
 class HealthResponse(BaseModel):
-    """健康检查响应"""
     status: str
     database: str
     agent: str
     memory: str
     version: str
 
-
-# === 应用生命周期管理 ===
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    global db_engine, memory_manager
-    
+    global agent_checkpointer, checkpoint_pool
     logger.info("application_starting", version="3.0.0")
-    
+
     try:
-        # 1. 初始化数据库连接
-        logger.info("initializing_database")
-        db_engine = create_async_engine(
-            settings.database_url,
-            pool_size=settings.DB_POOL_SIZE,
-            max_overflow=settings.DB_MAX_OVERFLOW,
-            pool_pre_ping=True,
-            echo=settings.LOG_LEVEL == "DEBUG"
-        )
-        
-        # 测试数据库连接
-        # [修复] 移除了内部 import，使用顶部的 text
+        # 使用 core.database 已经配置好的 engine 验证连接（不再重新创建）
+        logger.info("verifying_system_database_connection")
         async with db_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        
-        logger.info("database_initialized", url=settings.database_url.split("@")[1])
-        
-        # 2. 初始化记忆管理器
-        logger.info("initializing_memory_manager")
-        memory_manager = ConversationMemoryManager()
-        logger.info("memory_manager_initialized")
-        
-        # 3. 设置 LangSmith 追踪
-        if settings.LANGCHAIN_TRACING_V2 and settings.LANGCHAIN_API_KEY:
-            os.environ["LANGCHAIN_TRACING_V2"] = "true"
-            os.environ["LANGCHAIN_API_KEY"] = settings.LANGCHAIN_API_KEY
-            os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT
-            logger.info("langsmith_tracing_enabled", project=settings.LANGCHAIN_PROJECT)
-        
-        logger.info("application_started")
-        
+        logger.info("system_database_connected")
+
+        if settings.CHECKPOINT_DATABASE_URL and settings.CHECKPOINT_DATABASE_URL.startswith("postgresql"):
+                checkpoint_pool = AsyncConnectionPool(
+                    conninfo=settings.CHECKPOINT_DATABASE_URL,
+                    open=False,
+                    max_size=20,
+                    kwargs={"autocommit": True},
+                )
+                await checkpoint_pool.open()
+                agent_checkpointer = PostgresSaver(checkpoint_pool)
+                await agent_checkpointer.setup()
+        else:
+            agent_checkpointer = MemorySaver()
         yield
-        
-    except Exception as e:
-        logger.error("application_startup_failed", error=str(e), exc_info=True)
-        print(f"\n{'='*50}\nFATAL ERROR DURING STARTUP:\n{e}\n{'='*50}\n")
-        import traceback
-        traceback.print_exc()
-        raise
-    
+
     finally:
-        # 清理资源
-        logger.info("application_shutting_down")
-        
-        if db_engine:
-            await db_engine.dispose()
-            logger.info("database_connection_closed")
-        
-        logger.info("application_shutdown_complete")
-
-
-# === FastAPI 应用初始化 ===
+        # 清理所有目标数据库连接（用户配置的）
+        await EngineCache.cleanup()
+        logger.info("engine_cache_cleaned_up")
+        # 清理系统数据库连接
+        await db_engine.dispose()
+        if checkpoint_pool:
+            await checkpoint_pool.close()
 
 app = FastAPI(
     title="ChatBI Agent API",
-    description="生产级 AI 数据库查询助手，基于 LangChain 0.1+ 和 LangGraph",
+    description="生产级 AI 数据库查询助手 (LangGraph版)",
     version="3.0.0",
     lifespan=lifespan,
     docs_url="/docs",
-)  # [修复] 添加了缺失的闭合括号
+)
 
-# CORS 配置
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],  # 允许前端访问所有响应头
+    expose_headers=["*"],
 )
 
-# === 注册路由 ===
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Global exception: {exc}", exc_info=True)
+    if settings.DEV_MODE:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Global Processing Error", "message": str(exc)}
+        )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Global Processing Error"}
+    )
+
 app.include_router(auth_router)
 app.include_router(connections_router)
 app.include_router(llm_configs_router)
 app.include_router(chat_router)
+app.include_router(profile_router)
+app.include_router(speech_router)
 
-# === 依赖注入 ===
-
-from utils.agent_factory import create_agent_from_config
-from utils.jwt_auth import get_current_user_id
-from sqlalchemy.ext.asyncio import AsyncSession
-
-# ... existing imports ...
-
-# === 依赖注入 ===
-
-async def get_system_db() -> AsyncSession:
-    """获取系统数据库会话"""
+async def get_system_db() -> AsyncGenerator[AsyncSession, None]:
     if not db_engine:
-        raise HTTPException(
-            status_code=503,
-            detail="系统数据库尚未初始化"
-        )
-    
-    # 创建会话工厂
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    async_session = async_sessionmaker(
-        db_engine,
-        class_=AsyncSession,
-        expire_on_commit=False
-    )
-    
-    async with async_session() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
+        raise HTTPException(status_code=503, detail="系统数据库尚未初始化")
+    async with AsyncSessionLocal() as session:
+        yield session
 
-async def get_memory_manager() -> ConversationMemoryManager:
-    """获取记忆管理器实例"""
-    if memory_manager is None:
-        raise HTTPException(
-            status_code=503,
-            detail="记忆管理器尚未初始化，请稍后再试"
-        )
-    return memory_manager
-
-# === API 端点 ===
-
-@app.get("/", tags=["Root"])
-async def root():
-    """根路径"""
-    return {
-        "message": "ChatBI Agent API",
-        "version": "3.0.0",
-        "docs": "/docs"
-    }
-
-@app.get("/health", response_model=HealthResponse, tags=["Health"])
-async def health_check(
-    memory: ConversationMemoryManager = Depends(get_memory_manager)
-):
-    """健康检查"""
-    return HealthResponse(
-        status="healthy",
-        database="connected" if db_engine else "disconnected",
-        agent="ready",  # Agent按需创建，无需检查全局实例
-        memory="initialized" if memory else "not_initialized",
-        version="3.0.0"
-    )
-
-
-@app.post("/query", response_model=QueryResponse, tags=["Query"])
-async def query_database(
-    request: QueryRequest,
-    current_user_id: int = Depends(get_current_user_id),
-    system_db: AsyncSession = Depends(get_system_db)
-):
-    """
-    执行数据库查询
-    
-    支持流式和非流式两种模式
-    需要 JWT 认证，并根据 connection_id 和 llm_config_id 动态创建 Agent
-    """
-    target_db_engine = None
-    
+async def save_chat_message(
+    db: AsyncSession,
+    session_id: str,
+    role: str,
+    content: str,
+    user_id: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     try:
-        # 验证请求参数
-        if not request.connection_id:
-            raise HTTPException(status_code=400, detail="必须提供 connection_id")
-        if not request.llm_config_id:
-            raise HTTPException(status_code=400, detail="必须提供 llm_config_id")
-            
-        logger.info(
-            "query_received",
-            query=request.query,
-            session_id=request.session_id,
-            user_id=current_user_id,
-            connection_id=request.connection_id,
-            llm_config_id=request.llm_config_id
-        )
-        
-        # 动态创建 Agent
-        # 这会创建一个新的 AsyncEngine 连接到目标数据库，需要确保最后关闭它
-        agent_instance, target_db_engine = await create_agent_from_config(
-            user_id=current_user_id,
-            connection_id=request.connection_id,
-            llm_config_id=request.llm_config_id,
-            db_session=system_db
-        )
-        
-        if settings.ENABLE_METRICS and REQUEST_COUNT:
-            REQUEST_COUNT.labels(
-                endpoint="/query",
-                method="POST",
-                status="processing"
-            ).inc()
-        
-        # 流式响应
-        if request.stream:
-            # 使用包装器来确保流结束时关闭数据库连接
-            return StreamingResponse(
-                stream_agent_with_cleanup(
-                    agent_instance,
-                    request.query,
-                    request.session_id,
-                    request.metadata,
-                    target_db_engine
-                ),
-                media_type="text/event-stream"
+        if metadata and "thinking" in metadata and isinstance(metadata["thinking"], str) and len(metadata["thinking"]) > 5000:
+            metadata["thinking"] = metadata["thinking"][:5000] + "..."
+        stmt = select(ChatSession).where(ChatSession.id == session_id)
+        result = await db.execute(stmt)
+        session = result.scalar_one_or_none()
+        if not session and user_id:
+            session = ChatSession(id=session_id, user_id=user_id, title=content[:50])
+            db.add(session)
+            await db.flush()
+        if session:
+            new_message = ChatMessage(
+                session_id=session_id, role=role, content=content, message_metadata=metadata or {}
             )
-        
-        # 非流式响应
-        start_time = time.time()
-        
-        try:
-            result = await agent_instance.ainvoke(
-                query=request.query,
-                session_id=request.session_id,
-                metadata=request.metadata
+            db.add(new_message)
+            session.updated_at = datetime.now(UTC).replace(tzinfo=None)
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Failed to save chat message: {e}")
+
+async def get_few_shot_examples(db_session: AsyncSession, limit: int = 3):
+    try:
+        stmt = (
+            select(ChatMessage)
+            .where(ChatMessage.role == "ai", ChatMessage.feedback == "like")
+            .order_by(ChatMessage.created_at.desc())
+            .limit(limit)
+        )
+        result = await db_session.execute(stmt)
+        ai_msgs = result.scalars().all()
+
+        examples = []
+        for ai_msg in ai_msgs:
+            user_msg_stmt = (
+                select(ChatMessage.content)
+                .where(
+                    ChatMessage.session_id == ai_msg.session_id,
+                    ChatMessage.role == "user",
+                    ChatMessage.created_at < ai_msg.created_at
+                )
+                .order_by(ChatMessage.created_at.desc())
+                .limit(1)
             )
-        finally:
-            # 非流式模式下，执行完毕立即关闭连接
-            await target_db_engine.dispose()
-        
-        execution_time = time.time() - start_time
-        
-        if settings.ENABLE_METRICS and AGENT_EXECUTION_TIME:
-            AGENT_EXECUTION_TIME.observe(execution_time)
-        if settings.ENABLE_METRICS and REQUEST_COUNT:
-            REQUEST_COUNT.labels(
-                endpoint="/query",
-                method="POST",
-                status="success"
-            ).inc()
-        
-        logger.info(
-            "query_completed",
-            session_id=request.session_id,
-            execution_time=execution_time
-        )
-        
-        return QueryResponse(
-            summary=result.get("summary"),
-            sql=result.get("sql"),
-            chartOption=result.get("chartOption"),
-            error=result.get("error"),
-            session_id=request.session_id
-        )
-        
-    except HTTPException:
-        # 如果是 HTTPException，直接抛出，但在抛出前清理资源
-        if target_db_engine:
-            await target_db_engine.dispose()
-        raise
-        
-    except Exception as e:
-        # 清理资源
-        if target_db_engine:
-            await target_db_engine.dispose()
-            
-        logger.error(
-            "query_failed",
-            error=str(e),
-            query=request.query,
-            exc_info=True
-        )
-        
-        if settings.ENABLE_METRICS and REQUEST_COUNT:
-            REQUEST_COUNT.labels(
-                endpoint="/query",
-                method="POST",
-                status="error"
-            ).inc()
-        
-        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+            user_result = await db_session.execute(user_msg_stmt)
+            user_content = user_result.scalar_one_or_none()
 
-
-@app.post("/query/stream", tags=["Query"])
-async def query_database_stream(
-    request: QueryRequest,
-    current_user_id: int = Depends(get_current_user_id),
-    system_db: AsyncSession = Depends(get_system_db)
-):
-    """
-    流式执行数据库查询
-    
-    专门用于流式响应的端点
-    需要 JWT 认证，并根据 connection_id 和 llm_config_id 动态创建 Agent
-    """
-    target_db_engine = None
-    
-    try:
-        # 验证请求参数
-        if not request.connection_id:
-            # 发送错误信息到流中
-            async def error_stream():
-                yield f"data: {json.dumps({'type': 'error', 'content': '必须提供 connection_id'}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'type': 'end', 'content': '流程结束'}, ensure_ascii=False)}\n\n"
-            return StreamingResponse(error_stream(), media_type="text/event-stream")
-            
-        if not request.llm_config_id:
-            # 发送错误信息到流中
-            async def error_stream():
-                yield f"data: {json.dumps({'type': 'error', 'content': '必须提供 llm_config_id'}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'type': 'end', 'content': '流程结束'}, ensure_ascii=False)}\n\n"
-            return StreamingResponse(error_stream(), media_type="text/event-stream")
-            
-        logger.info(
-            "stream_query_received",
-            query=request.query,
-            session_id=request.session_id,
-            user_id=current_user_id,
-            connection_id=request.connection_id,
-            llm_config_id=request.llm_config_id
-        )
-        
-        # 动态创建 Agent
-        agent_instance, target_db_engine = await create_agent_from_config(
-            user_id=current_user_id,
-            connection_id=request.connection_id,
-            llm_config_id=request.llm_config_id,
-            db_session=system_db
-        )
-        
-        # 立即开始流式响应
-        return StreamingResponse(
-            stream_agent_with_cleanup(
-                agent_instance,
-                request.query,
-                request.session_id,
-                request.metadata,
-                target_db_engine
-            ),
-            media_type="text/event-stream"
-        )
-        
-    except HTTPException:
-        # 重新抛出 HTTP 异常
-        raise
-    except Exception as e:
-        # 其他异常，返回错误流
-        logger.error(
-            "stream_query_failed",
-            error=str(e),
-            query=request.query,
-            exc_info=True
-        )
-        
-        async def error_stream():
-            yield f"data: {json.dumps({'type': 'error', 'content': f'服务器错误: {str(e)}'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'end', 'content': '流程结束'}, ensure_ascii=False)}\n\n"
-        
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
-
-
-@app.post("/test/stream", tags=["Test"])
-async def test_stream(
-    request: QueryRequest
-):
-    """
-    测试流式端点 - 不需要认证
-    用于快速测试流式输出功能
-    """
-    try:
-        # 使用默认配置创建一个简单的测试 Agent
-        from agent.graph import ChatBIAgent
-        from langchain_community.llms.fake import FakeListLLM
-        
-        # 创建一个假的 LLM 来模拟思考过程
-        class FakeLLMWithTools:
-            def __init__(self):
-                self.responses = [
-                    "正在分析您的查询...",
-                    "我需要查询数据库来回答这个问题",
-                    "让我执行一个 SQL 查询来获取数据",
-                    "查询完成，正在分析结果...",
-                    "根据查询结果，我为您生成了以下答案"
-                ]
-                self.current_index = 0
-            
-            def bind_tools(self, tools):
-                return self
-            
-            async def ainvoke(self, messages):
-                # 模拟思考过程
-                content = self.responses[self.current_index % len(self.responses)]
-                self.current_index += 1
-                
-                # 创建一个假的 AIMessage
-                from langchain_core.messages import AIMessage
-                return AIMessage(content=content)
-        
-        fake_llm = FakeLLMWithTools()
-        
-        # 创建测试 Agent（使用内存数据库）
-        import sqlite3
-        import asyncio
-        
-        # 创建一个临时的内存数据库连接
-        async def create_test_engine():
-            # 这里我们创建一个假的引擎用于测试
-            return None
-        
-        agent = ChatBIAgent(db_engine=None, llm=fake_llm)
-        
-        # 重写 Agent 的 astream 方法来提供测试数据
-        async def test_astream(query, session_id, metadata):
-            # 模拟开始
-            yield {"agent": {"messages": []}}
-            
-            # 模拟思考过程
-            for i, response in enumerate(fake_llm.responses):
-                from langchain_core.messages import AIMessage
-                msg = AIMessage(content=response)
-                
-                if i < 2:  # 前两个作为思考过程
-                    yield {"agent": {"messages": [msg]}}
-                elif i == 2:  # 第三个作为工具调用
-                    msg.tool_calls = [{"name": "execute_sql", "args": {"sql": "SELECT * FROM users LIMIT 5"}}]
-                    yield {"agent": {"messages": [msg]}}
-                    yield {"tools": {"messages": [AIMessage(content="查询到 5 条用户数据")]}}
-                else:  # 后面的作为最终答案
-                    yield {"agent": {"messages": [msg]}}
-            
-            # 模拟结束
-            yield {"end": True}
-        
-        agent.astream = test_astream
-        
-        # 开始流式响应
-        return StreamingResponse(
-            stream_agent_response(agent, request.query, request.session_id, request.metadata),
-            media_type="text/event-stream"
-        )
-        
-    except Exception as e:
-        logger.error("test_stream_failed", error=str(e), exc_info=True)
-        
-        async def error_stream():
-            yield f"data: {json.dumps({'type': 'error', 'content': f'测试失败: {str(e)}'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'end', 'content': '测试结束'}, ensure_ascii=False)}\n\n"
-        
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
-
+            if user_content and ai_msg.message_metadata:
+                sql = ai_msg.message_metadata.get("sql_query")
+                if sql:
+                    examples.append({"question": user_content, "sql": sql})
+        return examples
+    except Exception:
+        return []
 
 async def stream_agent_with_cleanup(
     agent_instance: ChatBIAgent,
     query: str,
     session_id: str,
-    metadata: Optional[Dict[str, Any]],
-    db_engine: AsyncEngine
+    metadata: dict[str, Any] | None,
+    user_id: int,
+    system_db: AsyncSession,
 ):
-    """
-    流式响应包装器，确保流结束时关闭数据库引擎
-    """
+    full_answer = ""
+    accumulated_thinking = ""
+    generated_sql = None
+    chart_option = None
+    error_msg = None
+    is_completed = False
+    start_time = time.time()
     try:
-        async for chunk in stream_agent_response(agent_instance, query, session_id, metadata):
-            yield chunk
-    finally:
-        logger.info("closing_target_db_engine", session_id=session_id)
-        await db_engine.dispose()
-
-
-def serialize_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    序列化事件数据，将 LangChain 消息对象转换为可 JSON 序列化的格式
-    """
-    from langchain_core.messages import BaseMessage
-    
-    def serialize_value(value):
-        """递归序列化值"""
-        if isinstance(value, BaseMessage):
-            # 将 LangChain 消息转换为字典
-            return {
-                "type": value.__class__.__name__,
-                "content": value.content,
-            }
-        elif isinstance(value, dict):
-            return {k: serialize_value(v) for k, v in value.items()}
-        elif isinstance(value, (list, tuple)):
-            return [serialize_value(item) for item in value]
-        else:
-            return value
-    
-    return serialize_value(event)
-
-
-async def stream_agent_response(
-    agent_instance: ChatBIAgent,
-    query: str,
-    session_id: str,
-    metadata: Optional[Dict[str, Any]]
-):
-    """
-    流式传输 Agent 响应 (核心逻辑)
-    将 LangGraph 事件转换为前端期望的格式
-    """
-    try:
-        logger.info("stream_started", query=query, session_id=session_id)
-        
-        # 立即发送开始信号
-        yield f"data: {json.dumps({'type': 'start', 'content': '正在思考中...'}, ensure_ascii=False)}\n\n"
-        
-        # 用于累积最终结果
-        final_state = None
-        
-        async for event in agent_instance.astream(query, session_id, metadata):
-            # LangGraph 返回的事件格式: {node_name: node_output}
-            # 例如: {'agent': {...state...}} 或 {'tools': {...state...}}
-            
-            # 提取节点名称和状态
-            # 提取节点名称和状态
-            for node_name, node_state in event.items():
-                if node_name == 'agent':
-                    # Agent 节点
-                    messages = node_state.get('messages', [])
-                    if messages:
-                        last_msg = messages[-1]
-                        
-                        # 检查是否有工具调用
-                        if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-                            # 这是一个意图调用工具的步骤，通常包含思考过程
-                            content = last_msg.content
-                            if content:
-                                # 发送思考过程
-                                sse_data = {
-                                    "type": "thought",
-                                    "content": content
-                                }
-                                logger.info(f"Sending thought: {content[:100]}...")
-                                yield f"data: {json.dumps(sse_data, ensure_ascii=False)}\n\n"
-                                
-                            # 发送工具调用信息
-                            for tool_call in last_msg.tool_calls:
-                                tool_info = {
-                                    "type": "tool_call",
-                                    "tool": tool_call.get("name"),
-                                    "args": tool_call.get("args")
-                                }
-                                logger.info(f"Sending tool call: {tool_call.get('name')}")
-                                yield f"data: {json.dumps(tool_info, ensure_ascii=False)}\n\n"
-                                
-                        elif hasattr(last_msg, "content") and last_msg.content:
-                            # 这是一个纯文本响应，可能是最终答案，也可能是中间对话
-                            # 我们暂时都作为 thought 发送，前端可以追加显示
-                            # 或者我们可以判断是否是最后一步
-                            sse_data = {
-                                "type": "thought",  # 或者 "chunk" 如果支持逐字流式
-                                "content": last_msg.content
-                            }
-                            logger.info(f"Sending thought content: {last_msg.content[:100]}...")
-                            yield f"data: {json.dumps(sse_data, ensure_ascii=False)}\n\n"
-                
-                elif node_name == 'tools':
-                    # 工具节点 - 包含工具执行结果
-                    # 发送具体的工具输出
-                    messages = node_state.get('messages', [])
-                    if messages:
-                        last_msg = messages[-1]
-                        if hasattr(last_msg, "content"):
-                            sse_data = {
-                                "type": "observation",
-                                "content": str(last_msg.content)
-                            }
-                            logger.info(f"Sending observation: {str(last_msg.content)[:100]}...")
-                            yield f"data: {json.dumps(sse_data, ensure_ascii=False)}\n\n"
-                
-                # 保存最终状态
-                final_state = node_state
-        
-        # 流结束后，发送最终输出
-        if final_state:
-            # 使用 Agent 的提取方法来解析最终状态
-            # 这会提取 SQL、数据和图表配置
-            final_response = agent_instance._extract_final_answer(final_state)
-            
-            # 发送最终输出
-            sse_data = {
-                "type": "final_output",
-                "content": {
-                    "summary": final_response.get("summary", "分析完成"),
-                    "sql": final_response.get("sql"),
-                    "chartOption": final_response.get("chartOption"),
-                    "data": final_response.get("data")
-                }
-            }
-            yield f"data: {json.dumps(sse_data, ensure_ascii=False)}\n\n"
-        
-        # 发送结束事件
-        sse_end = {"type": "end", "content": "回答完成"}
-        yield f"data: {json.dumps(sse_end, ensure_ascii=False)}\n\n"
-        
-        logger.info("stream_completed", session_id=session_id)
-        
+        yield f"data: {json.dumps({'type': 'start', 'content': '开始处理'}, cls=SafeJSONEncoder, ensure_ascii=False)}\n\n"
+        async for event in agent_instance.astream(query=query, session_id=session_id, metadata=metadata):
+            event_type = event.get("type")
+            if event_type == "final_answer":
+                content = event.get("content", "")
+                if content:
+                    full_answer += content
+                if event.get("chartOption"):
+                    chart_option = event.get("chartOption")
+                if event.get("thinking"):
+                    accumulated_thinking = event.get("thinking")
+                if event.get("sql"):
+                    generated_sql = event.get("sql")
+            elif event_type == "thinking":
+                accumulated_thinking += event.get("content", "")
+            elif event_type == "sql_generated":
+                generated_sql = event.get("content")
+            elif event_type == "error":
+                error_msg = event.get("content")
+            yield f"data: {json.dumps(event, cls=SafeJSONEncoder, ensure_ascii=False)}\n\n"
+        is_completed = True
     except Exception as e:
-        logger.error(
-            "stream_failed",
-            error=str(e),
-            query=query,
-            exc_info=True
-        )
-        
-        # 发送错误信息
-        error_data = {
-            "type": "error",
-            "content": f"处理过程中出现错误: {str(e)}"
-        }
-        yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+        logger.error(f"流处理错误: {e}", exc_info=True)
+        error_msg = str(e)
+        error_content = f"处理出错: {str(e)}" if settings.DEV_MODE else "Global Processing Error"
+        yield f"data: {json.dumps({'type': 'error', 'content': error_content, 'done': True}, ensure_ascii=False)}\n\n"
+    finally:
+        execution_time = time.time() - start_time
+        try:
+            content_to_save = full_answer if full_answer else (error_msg or "无回答")
+            msg_metadata = {
+                "sql_query": generated_sql,
+                "thinking": accumulated_thinking,
+                "chartOption": chart_option,
+                "error": error_msg,
+                "execution_time": round(execution_time, 2)
+            }
+            await save_chat_message(system_db, session_id, "ai", content_to_save, user_id, msg_metadata)
+        except Exception as e:
+            logger.error(f"保存消息失败: {e}")
+        yield f"data: {json.dumps({'type': 'execution_time', 'content': f'{execution_time:.2f}秒'}, cls=SafeJSONEncoder, ensure_ascii=False)}\n\n"
 
+        if not is_completed and not error_msg:
+             yield f"data: {json.dumps({'type': 'error', 'content': '流意外中断', 'done': True}, ensure_ascii=False)}\n\n"
+        else:
+            # ✅ 关键修复：始终发送 end 事件通知前端流已结束（解锁 isLoading 状态）
+            yield f"data: {json.dumps({'type': 'end', 'content': '完成', 'done': True}, cls=SafeJSONEncoder, ensure_ascii=False)}\n\n"
+
+@app.get("/", tags=["Root"])
+async def root():
+    return {"message": "Welcome to ChatBI Agent API", "docs": "/docs", "health": "/health"}
+
+@app.get("/health", response_model=HealthResponse, tags=["Health"])
+async def health_check():
+    return HealthResponse(
+        status="healthy", database="connected" if db_engine else "disconnected",
+        agent="ready", memory="langgraph_checkpointer", version="3.0.0",
+    )
+
+@app.post("/query", response_model=QueryResponse, tags=["Query"])
+async def query_database(
+    request: QueryRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    system_db: AsyncSession = Depends(get_system_db),
+):
+    if not request.connection_id or not request.llm_config_id:
+        raise HTTPException(status_code=400, detail="必须提供 connection_id 和 llm_config_id")
+
+    few_shot = await get_few_shot_examples(system_db)
+    metadata = request.metadata or {}
+    metadata["few_shot_examples"] = few_shot
+
+    # ✅ 修复：使用上下文管理器，并修正了 try 语法错误
+    async with agent_context(
+        user_id=current_user_id,
+        connection_id=request.connection_id,
+        llm_config_id=request.llm_config_id,
+        db_session=system_db,
+        checkpointer=agent_checkpointer
+    ) as agent_instance:
+
+        # 先保存用户消息（小修复：原来缺失此步骤）
+        await save_chat_message(system_db, request.session_id, "user", request.query, user_id=current_user_id)
+
+        start_time = time.time()
+        try:
+            result = await agent_instance.ainvoke(
+                query=request.query, 
+                session_id=request.session_id, 
+                metadata=metadata
+            )
+        except Exception as e:
+            logger.error(f"查询执行错误: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+            
+        execution_time = time.time() - start_time
+
+        ai_content = result.get("summary", "")
+        msg_metadata = {
+            "sql_query": result.get("sql"), "chartOption": result.get("chartOption"),
+            "thinking": result.get("thinking"), "error": result.get("error"),
+            "execution_time": round(execution_time, 2)
+        }
+        await save_chat_message(system_db, request.session_id, "ai", ai_content, user_id=current_user_id, metadata=msg_metadata)
+
+        return QueryResponse(
+            summary=result.get("summary"), thinking=result.get("thinking"), sql=result.get("sql"),
+            chartOption=result.get("chartOption"), data=result.get("data"), error=result.get("error"),
+            session_id=request.session_id, execution_time=round(execution_time, 2),
+        )
+
+@app.post("/query/stream", tags=["Query"])
+async def query_database_stream(
+    request: QueryRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    system_db: AsyncSession = Depends(get_system_db),
+):
+    if not request.connection_id or not request.llm_config_id:
+        raise HTTPException(status_code=400, detail="必须提供 connection_id 和 llm_config_id")
+
+    async def stream_generator():
+        few_shot = await get_few_shot_examples(system_db)
+        metadata = request.metadata or {}
+        metadata["few_shot_examples"] = few_shot
+
+        # ✅ 修复：在生成器内部使用上下文管理器
+        async with agent_context(
+            user_id=current_user_id,
+            connection_id=request.connection_id,
+            llm_config_id=request.llm_config_id,
+            db_session=system_db,
+            checkpointer=agent_checkpointer,
+        ) as agent_instance:
+
+            await save_chat_message(system_db, request.session_id, "user", request.query, user_id=current_user_id)
+
+            async for chunk in stream_agent_with_cleanup(
+                agent_instance=agent_instance, 
+                query=request.query, 
+                session_id=request.session_id,
+                metadata=metadata, 
+                user_id=current_user_id, 
+                system_db=system_db,
+            ):
+                yield chunk
+
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+@app.post("/test/stream", tags=["Test"])
+async def test_stream(request: QueryRequest):
+    async def mock_generator():
+        yield f"data: {json.dumps({'type': 'start', 'content': '开始测试流'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'end', 'content': '完成', 'done': True}, ensure_ascii=False)}\n\n"
+    return StreamingResponse(mock_generator(), media_type="text/event-stream")
 
 @app.get("/metrics", tags=["Monitoring"])
 async def metrics():
-    """Prometheus 指标端点"""
     if not settings.ENABLE_METRICS:
-        raise HTTPException(status_code=404, detail="指标收集未启用")
-    
-    return JSONResponse(
-        content=generate_latest(REGISTRY).decode("utf-8"),
-        media_type=CONTENT_TYPE_LATEST
-    )
-
+        raise HTTPException(status_code=404, detail="Metrics disabled")
+    return JSONResponse(content=generate_latest(REGISTRY).decode("utf-8"), media_type=CONTENT_TYPE_LATEST)
 
 @app.delete("/session/{session_id}", tags=["Session"])
 async def clear_session(
     session_id: str,
-    memory: ConversationMemoryManager = Depends(get_memory_manager),
-    current_user_id: int = Depends(get_current_user_id)
+    current_user_id: int = Depends(get_current_user_id),
+    system_db: AsyncSession = Depends(get_system_db),
 ):
-    """清除会话记忆"""
-    try:
-        memory.clear_session(session_id)
-        logger.info("session_cleared", session_id=session_id)
-        return {"message": f"会话 {session_id} 已清除"}
-    except Exception as e:
-        logger.error("clear_session_failed", error=str(e), session_id=session_id)
-        raise HTTPException(status_code=500, detail=str(e))
+    stmt = select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == current_user_id)
+    session = (await system_db.execute(stmt)).scalar_one_or_none()
+    if session:
+        await system_db.delete(session)
+        await system_db.commit()
+    return {"message": "Session cleared"}
 
-
-@app.get("/session/{session_id}/stats", tags=["Session"])
-async def get_session_stats(
-    session_id: str,
-    memory: ConversationMemoryManager = Depends(get_memory_manager),
-    current_user_id: int = Depends(get_current_user_id)
-):
-    """获取会话统计信息"""
-    try:
-        stats = memory.get_session_stats(session_id)
-        return stats
-    except Exception as e:
-        logger.error("get_session_stats_failed", error=str(e), session_id=session_id)
-        raise HTTPException(status_code=500, detail=str(e))
-
+if __name__ == "__main__":
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
 
 # === 启动命令 ===
 # uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-
-if __name__ == "__main__":
-    # [修复] 修正了缩进，并使用顶部导入的 uvicorn
-    uvicorn.run(
-        "app:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level=settings.LOG_LEVEL.lower()
-    )

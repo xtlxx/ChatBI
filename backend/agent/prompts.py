@@ -1,223 +1,330 @@
+# agent/prompts.py
+# Agent Prompts 定义 - 生产级优化版
+# 包含系统提示词、Few-Shot 示例和各种场景的提示模板
+
+from typing import Any
+
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+# ============================================================
+# 核心业务表定义（极简，只保留最关键字段）
+# ============================================================
+
+CORE_TABLES: dict[str, tuple[str, list[str]]] = {
+    # === 财务 (acc_) ===
+    'acc_product_shipment': ('seq', ['seq', 'order_seq', 'po_no', 'customer_id', 'customer_name', 'sku', 'art_code', 'art_name', 'shipment_quantity《单位:双》', 'shipment_at']),
+    'acc_reconciliation': ('seq', ['seq', 'bill_no', 'customer_id', 'customer_name', 'transaction_amount《单位:元》', 'receivable_amount《单位:元》', 'status']),
+
+    # === 基础数据 (bas_) ===
+    'bas_company': ('id', ['id', 'code', 'name', 'company_name']),
+    'bas_custom': ('id', ['id', 'code', 'name', 'simple_name', 'company_type']),
+
+    # === 订单 (od_) ===
+    'od_order_doc': ('seq', ['seq', 'code', 'type_name', 'order_date', 'custom_seq', 'custom_name', 'total_number《单位:双，订单总数量》', 'status_code']),
+    'od_order_doc_article': ('seq', ['seq', 'od_order_doc_seq', 'row_no', 'art_seq', 'sku', 'name', 'total_number《单位:双，明细行数量》']),
+
+    # === 产品 (om_) ===
+    'om_article': ('seq', ['seq', 'sku', 'code', 'name', 'customer_seq', 'customer_name', 'color_name']),
+
+    # === 采购 (proc_) ===
+    'proc_material_procurement': ('seq', ['seq', 'code', 'procurement_type', 'product_order_code', 'sku', 'art_name', 'plan_date', 'status']),
+
+    # === 库存 (store) ===
+    'store': ('id', ['id', 'material_code', 'material_name', 'product_code', 'customer_name', 'on_hand_qty《单位:双，库存数量》', 'warehouse_name']),
+}
+
+# ============================================================
+# 软删除规则（极其重要！）
+# ============================================================
+SOFT_DELETE_RULES = {
+    'default':   ('is_deleted', '0'),
+    'acc_':      ('del_flag',   '0'),
+    'bas_':      ('is_delete',  '0'),
+    'om_':       ('is_deleted', '0'),
+    'od_':       ('is_deleted', '0'),
+    'proc_':     ('is_deleted', '0'),
+    'store':     ('is_deleted', '0'),
+}
+
+def generate_schema_info() -> str:
+    """动态生成精简、结构化的 Schema 信息"""
+    lines = [
+        "### 数据库表关系说明 (Schema Context)",
+        "这是一个鞋服制造行业的 MES/ERP 系统数据库。",
+        "",
+        "**🚨 重要警告：**",
+        "1. 所有非核心业务字段（审计字段、创建/更新人、备注等）已被物理移除。",
+        "2. 你只看到业务必须的核心字段，禁止臆造任何其他字段。",
+        "",
+        "**🗑️ 软删除规则（强制执行！）**",
+        "本系统全部采用软删除。**任何 SELECT 查询涉及的每一张表都必须加上正确的软删除条件，否则视为严重错误！**",
+    ]
+
+    for prefix, (field, value) in SOFT_DELETE_RULES.items():
+        if prefix == 'default':
+            lines.append(f"- 其他表（未列出前缀）：`{field} = '{value}'`")
+        else:
+            lines.append(f"- 以 `{prefix}` 开头的表：`{field} = '{value}'`")
+
+    lines.append("\n**📊 核心表与关键字段（仅列出最常用字段）**")
+    for table, (pk, fields) in sorted(CORE_TABLES.items()):
+        lines.append(f"- `{table}` (主键: `{pk}`)：{', '.join(fields)}")
+
+    return "\n".join(lines)
+
+SCHEMA_CONTEXT = generate_schema_info()
+
+# ============================================================
+# Few-Shot 示例库（已扩充，包含 JOIN 示例）
+# ============================================================
+FEW_SHOT_EXAMPLES = [
+    # SQL 示例 - 简单聚合
+    {
+        "mode": "sql",
+        "query": "查询本月销售总额",
+        "sql": """SELECT IFNULL(SUM(total_number), 0) AS total_qty
+FROM od_order_doc
+WHERE order_date >= DATE_FORMAT(NOW(), '%Y-%m-01')
+  AND is_deleted = 0""",
+        "thought": "1. 本月销售总额 → od_order_doc 表\n2. 时间条件用 DATE_FORMAT\n3. 必须加软删除 is_deleted=0"
+    },
+    # SQL 示例 - 分组排名
+    {
+        "mode": "sql",
+        "query": "统计各客户订单数量前5名",
+        "sql": """SELECT custom_name, COUNT(seq) AS order_count
+FROM od_order_doc
+WHERE is_deleted = 0
+GROUP BY custom_name
+ORDER BY order_count DESC
+LIMIT 5""",
+        "thought": "1. 按客户统计订单数并排名\n2. 只需 od_order_doc 表\n3. GROUP BY + COUNT + ORDER BY + LIMIT"
+    },
+    # SQL 示例 - 模糊查询
+    {
+        "mode": "sql",
+        "query": "查找名称包含“安踏”的客户",
+        "sql": """SELECT id, code, name, simple_name
+FROM bas_custom
+WHERE name LIKE '%安踏%'
+  AND is_deleted = 0""",
+        "thought": "1. 模糊匹配客户名称\n2. bas_custom 表\n3. LIKE + 软删除"
+    },
+    # 新增 - JOIN 示例 1（订单 + 明细）
+    {
+        "mode": "sql",
+        "query": "查询最近一个月每个订单的商品数量明细",
+        "sql": """SELECT d.od_order_doc_seq, d.sku, d.name, d.total_number,
+       o.code AS order_code, o.order_date, o.custom_name
+FROM od_order_doc_article d
+INNER JOIN od_order_doc o ON d.od_order_doc_seq = o.seq
+WHERE o.order_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
+  AND o.is_deleted = 0
+  AND d.is_deleted = 0
+ORDER BY o.order_date DESC
+LIMIT 100""",
+        "thought": "1. 需要订单基本信息 + 商品明细 → JOIN od_order_doc 和 od_order_doc_article\n2. 最近一个月时间范围\n3. 两表都要加软删除条件"
+    },
+    # 新增 - JOIN 示例 2（订单 + 产品 + 客户）
+    {
+        "mode": "sql",
+        "query": "统计安踏客户近半年已发货的产品数量",
+        "sql": """SELECT a.name AS art_name, SUM(d.total_number) AS shipped_qty
+FROM od_order_doc o
+INNER JOIN od_order_doc_article d ON o.seq = d.od_order_doc_seq
+INNER JOIN om_article a ON d.art_seq = a.seq
+WHERE o.custom_name LIKE '%安踏%'
+  AND o.order_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+  AND o.is_deleted = 0
+  AND d.is_deleted = 0
+  AND a.is_deleted = 0
+GROUP BY a.name
+ORDER BY shipped_qty DESC""",
+        "thought": "1. 安踏客户 + 近半年 + 已发货数量 → 需要 JOIN 三表\n2. 客户名模糊匹配\n3. 三张表都要加软删除条件"
+    },
+
+    # 响应生成示例
+    {
+        "mode": "response",
+        "query": "本月销售趋势如何？",
+        "content": """## 1. 核心结论 (Executive Summary)
+本月整体销售呈现**稳步上升**趋势，月中达到峰值。
+> **关键指标**：总销量 **12,450** 件，环比增长 **15%**。
+
+## 2. 数据详情 (Data Evidence)
+| 日期       | 订单数 | 销售数量 |
+|:-----------|-------:|---------:|
+| 2025-02-01 |     45 |    1,280 |
+| 2025-02-10 |     78 |    2,450 |
+...
+
+## 3. 趋势与异常 (Trends & Anomalies)
+- **趋势**：上旬增长较缓，中旬出现明显高峰。
+- **异常**：2月15日单日销量异常高（3,000件），可能有大客户集中下单。
+
+## 4. 业务建议 (Actionable Insights)
+1. 针对月中高峰，建议提前备货并增加生产线排班。
+2. 分析2月15日大单来源，尝试复制该客户合作模式。""",
+        "chart_hint": "建议使用折线图展示销售趋势"
+    }
+]
+
+def select_few_shot_examples(query: str, max_examples: int = 3, mode: str = "sql") -> list[dict[str, Any]]:
+    """根据查询语义选择最相关的 Few-Shot 示例"""
+    candidates = [ex for ex in FEW_SHOT_EXAMPLES if ex.get("mode") == mode]
+
+    # 简单关键词加权（可后续升级为向量相似度）
+    keywords = ["本月", "总额", "趋势", "排名", "客户", "安踏", "近", "JOIN", "明细", "发货"]
+    scored = []
+    for ex in candidates:
+        score = sum(1 for kw in keywords if kw in query and kw in ex["query"])
+        scored.append((score, ex))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [item[1] for item in scored[:max_examples]]
+
+def format_few_shot_examples(examples: list[dict[str, Any]]) -> str:
+    """格式化 Few-Shot 示例为 Prompt 文本"""
+    if not examples:
+        return ""
+
+    parts = ["\n### 参考示例（Few-Shot Examples）\n"]
+    for i, ex in enumerate(examples, 1):
+        parts.append(f"#### 示例 {i}")
+        parts.append(f"用户问题：{ex['query']}")
+        if "thought" in ex:
+            parts.append(f"思考过程：\n{ex['thought']}")
+        if ex["mode"] == "sql":
+            parts.append(f"正确 SQL：\n```sql\n{ex['sql']}\n```")
+        else:
+            parts.append(f"参考回答结构：\n{ex['content']}")
+        parts.append("")
+    return "\n".join(parts)
+
+# ============================================================
+# 1. 意图识别与思维链 (Thinking)
+# ============================================================
+THINKING_SYSTEM = """你是一位拥有 20 年经验的鞋服行业业务高管，同时也是精通企业数据的战略顾问。
+你的任务是：深度剖析用户的业务问题，将其转化为严谨的数据分析策略。
+
+### 核心思维步骤（请严格按此顺序思考并输出）
+1. **业务意图解码**：用户真正关心的业务价值是什么？（是关注营收增长、库存周转风险、还是供应链效率？）
+2. **数据策略映射**：为了回答这个业务问题，我们需要调取哪些核心数据资产？（请参考下方的 Schema Context）
+3. **关键指标定义**：如何精确定义分析维度？（时间窗口、业务状态、客户筛选等条件）
+4. **数据完整性保障**：必须强制应用软删除规则，确保数据准确无误。（列出所有涉及表的软删除条件）
+5. **关联逻辑构建**：如何通过多表关联还原业务全貌？（说明表之间的业务关系）
+6. **分析目标设定**：最终交付的分析结果应包含什么？（总量统计、趋势分析、异常检测、排名分布？）
+
+### 输出格式（请使用业务语言，但保持技术严谨）
+1. **业务意图**：...
+2. **核心数据资产**：... (对应具体表名)
+3. **关键指标与筛选**：...
+4. **数据清洗规则**：... (软删除条件)
+5. **业务关联逻辑**：...
+6. **最终分析目标**：...
+
+当前可用的完整 Schema 信息如下，请务必严格参考，禁止臆造表名或字段：
+{schema_context}
 """
-Agent Prompts 定义
-包含系统提示词和各种场景的提示模板
+
+THINKING_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", THINKING_SYSTEM),
+    MessagesPlaceholder(variable_name="messages"),
+    ("human", "{query}"),
+])
+
+# ============================================================
+# 2. SQL 生成 (SQL Generation)
+# ============================================================
+SQL_GEN_SYSTEM = """你是一个 MySQL 专家。请根据用户需求和提供的 Schema Context 生成**只读**的 SELECT SQL。
+
+### 强制规则（违反任何一条都视为严重错误）
+1. **只生成 SELECT 查询**，严禁出现 INSERT/UPDATE/DELETE/DROP 等
+2. **必须为每张出现的表都加上正确的软删除条件**（参考 Schema 中的软删除规则）
+   **再次强调：每张表都要加！漏加视为严重错误！**
+3. 严格使用 Schema 中列出的表名和字段名，**禁止臆造任何字段**
+4. 优先使用索引字段，避免 SELECT *，建议明确列出需要的字段
+5. 默认加上 LIMIT 100 防止返回过多数据
+6. 使用 MySQL 标准函数：DATE_FORMAT、NOW()、DATE_SUB 等
+7. 如果涉及时间范围，优先使用日期函数而非字符串比较
+
+{few_shot_examples}
+
+请先生成思考过程（Thought），再给出最终 SQL。
 """
 
+SQL_GEN_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", SQL_GEN_SYSTEM),
+    MessagesPlaceholder(variable_name="messages"),
+    ("human", """用户问题：{query}
 
-def get_system_prompt() -> str:
-    """获取系统提示词"""
-    return """### 数据库表关系说明
-**核心业务表关系**:
-1. **订单相关**:
-   - od_order_doc (订单主表) ← od_order_doc_article (订单明细)
-   - od_order_doc.seq = od_order_doc_article.order_seq
-   - od_product_order_doc (生产订单) ← od_product_order_order_position (生产订单明细)
+### Schema Context（必须严格遵守）
+{schema_context}
 
-2. **产品相关**:
-   - om_article (产品主表，核心表)
-   - om_art_position_material (产品物料清单BOM)
-   - om_article.seq 被多个表的 art_id 或相关字段引用
+请输出你的思考过程和最终 SQL。"""),
+])
 
-3. **出货对账相关**:
-   - acc_product_shipment (成品出库表)
-   - acc_product_shipment.order_seq → od_order_doc.seq (关联订单)
-   - acc_reconciliation (对账主表) ← acc_reconciliation_detail (对账明细)
-   - acc_reconciliation ← acc_reconciliation_deduction (扣款明细)
-   - acc_reconciliation.seq = acc_reconciliation_deduction.acc_reconciliation_seq
+# ============================================================
+# 3. 最终报告生成 (Response Generation)
+# ============================================================
+RESPONSE_GEN_SYSTEM = """你是一位资深业务分析专家，正在向公司高管汇报。请根据用户问题和 SQL 执行结果，生成一份格式精美、观点鲜明、具有决策价值的 Markdown 格式分析报告。
 
-4. **采购相关**:
-   - proc_material_procurement (采购主表) ← proc_material_procurement_info (采购明细)
-   - proc_material_list (物料清单) ← proc_material_list_info (物料清单明细)
-   - proc_material_warehousing (物料入库)
-   - proc_material_temporarily_receiving (临时收货)
+### 报告排版要求（重要）
+1. **排版美观**：充分利用 Markdown 语法。使用 `##` 二级标题分隔板块，关键指标使用 `**加粗**` 或 `> 引用块` 突出显示。
+2. **数据可视化**：表格必须对齐，数字建议使用千分位分隔符（如 1,234）。
+3. **结构清晰**：按照“结论先行 -> 数据支撑 -> 深度洞察 -> 行动建议”的逻辑组织内容。
 
-5. **库存相关**:
-   - store (库存主表)
-   - store_in_list (入库单)
-   - store_out_list (出库单)
-   - store_detail_list (库存明细)
-   - storehouse (仓库) ← storage (库位)
+### 输出结构（请严格遵循）
 
-6. **基础数据**:
-   - bas_supplier (供应商)
-   - mx_material_info (物料信息) ← mx_material_category (物料分类)
-   - t_material_ledger (物料台账)
+## 1. 核心结论 (Executive Summary)
+   - 开门见山，用 1-2 句话总结最核心的业务发现。
+   - **关键指标卡片**：使用列表或引用块展示核心数字（如总销量、增长率等），让高管一眼看到重点。
 
-7. **生产工艺**:
-   - sop_manufacturing_process (制造工艺)
-   - sop_workshop_section (车间工段)
-   - sop_working_procedure (工序)
-   - working_procedure (工序定义)
+## 2. 数据详情 (Data Evidence)
+   - 使用标准 Markdown 表格展示数据。
+   - 确保列名具有业务含义，数字列右对齐。
 
-8. **成本报价**:
-   - t_standard_cost_budget (标准成本预算)
-   - t_material_cost (物料成本)
-   - t_mold_cost (模具成本)
-   - t_customer_quotation (客户报价)
+## 3. 趋势与异常 (Trends & Anomalies)
+   - 分析数据的演变趋势（环比/同比）。
+   - **重点高亮**：明确指出异常值（极高/极低）或断崖式变化，并尝试解释可能的原因。
 
-9. **设备相关**:
-   - mac_oee (设备OEE)
-   - ods_mac (设备数据)
-   - equip_parameter (设备参数)
+## 4. 业务建议 (Actionable Insights)
+   - 站在管理层角度，给出 1-3 条具体的行动建议。
+   - 建议应针对上述发现的问题或机会点。
 
-10. **质量相关**:
-   - po_report_yie_id (良率报告)
-   - po_defective_product (不良品)
-   - po_wms_info_data (仓储信息)
+### 重要约束
+- **只能**使用提供的 sql_result 数据，**禁止任何形式的虚构或补全**。
+- **单位必须严格根据字段含义推断，绝对禁止脑补！**
+  - `total_number` / `on_hand_qty` / `shipment_quantity` 等数量字段 → 单位是「双」，不是「元」
+  - `transaction_amount` / `receivable_amount` 等金额字段 → 单位是「元」
+  - `COUNT(*)` / `COUNT(seq)` 等计数结果 → 单位是「笔/条/次」，具体根据上下文判断
+  - 如果字段含义不明确，直接输出原字段名作为表头，不推断单位
+- 保持客观、专业、中立，避免使用过于技术化的术语（如“表”、“字段”），转换为业务术语。
+- 严禁泄露 SQL 语句等底层技术细节。
+- 数据为空时，礼貌说明“当前筛选条件下未发现相关业务记录”，并建议调整分析范围。
 
-**常用字段说明**:
-# 主键
-- seq/id: 主键ID(大多数表使用 seq)
-
-# 客户供应商
-- customer_id/customer_seq/customer_code/customer_name: 客户相关字段
-- supplier_id/supplier_seq/supplier_code/supplier_name: 供应商相关字段
-
-# 产品订单
-- art_id/art_seq/art_code/art_name: 产品型体相关字段
-- order_seq/order_code/po_no: 订单相关字段
-- prou_order_seq: 生产指令号
-- od_product_order_code: ERP生产单号
-
-# 物料样品
-- material_code/material_name: 物料编码/名称
-- sample_order_code/sample_order_seq: 样品单号
-- sku/basic_size_code: SKU/尺码
-
-# 数量金额
-- quantity/amount: 数量
-- actual_amount: 实际数量(注意:actual_num 在部分表中可能有格式问题)
-- price/unit_price: 单价
-- settlement_quantity/settlement_price/settlement_amount: 结算相关
-- currency_type: 币种
-
-# 单据编号
-- bill_no: 单据号/对账单号
-- shipment_code: 出库单号
-- delivery_code: 送货单号
-
-# 时间人员
-- created_at/created_by: 创建时间/创建人
-- update_at/update_by (或 updated_at/updated_by): 修改时间/修改人
-- delete_at/delete_by: 删除时间/删除人
-
-# 状态标记
-- del_flag: 删除标记 (0-未删除, 1-已删除)
-- is_delete: 是否删除 (0-否, 1-是)
-- is_available: 是否可用 (0-可用, 1-不可用)
-- status: 状态码
-
-# 其他
-- remark: 备注
-- brand_name/season: 品牌/季节
-
-**JOIN 查询建议**:
-
-# 订单业务链
-- 订单主表→订单明细:od_order_doc JOIN od_order_doc_article ON od_order_doc.seq = od_order_doc_article.order_seq
-- 订单→出货:od_order_doc JOIN acc_product_shipment ON od_order_doc.seq = acc_product_shipment.order_seq
-- 订单→产品:od_order_doc JOIN om_article ON od_order_doc.art_id = om_article.seq
-- 生产订单→生产订单明细:od_product_order_doc JOIN od_product_order_order_position ON od_product_order_doc.seq = od_product_order_order_position.parent_seq
-
-# 产品物料链
-- 产品→物料清单(BOM):om_article JOIN om_art_position_material ON om_article.seq = om_art_position_material.art_id
-- 物料信息→物料分类:mx_material_info JOIN mx_material_category ON mx_material_info.category_id = mx_material_category.seq
-
-# 对账业务链
-- 对账主表→对账明细:acc_reconciliation JOIN acc_reconciliation_detail ON acc_reconciliation.seq = acc_reconciliation_detail.acc_reconciliation_seq
-- 对账主表→扣款明细:acc_reconciliation JOIN acc_reconciliation_deduction ON acc_reconciliation.seq = acc_reconciliation_deduction.acc_reconciliation_seq
-- 对账明细→出货记录:acc_reconciliation_detail JOIN acc_product_shipment ON acc_reconciliation_detail.acc_product_shipment_seq = acc_product_shipment.seq
-
-# 采购业务链
-- 采购主表→采购明细:proc_material_procurement JOIN proc_material_procurement_info ON proc_material_procurement.seq = proc_material_procurement_info.parent_seq
-- 物料清单→物料清单明细:proc_material_list JOIN proc_material_list_info ON proc_material_list.seq = proc_material_list_info.parent_seq
-- 采购→供应商:proc_material_procurement JOIN bas_supplier ON proc_material_procurement.supplier_id = bas_supplier.seq
-- 物料入库:proc_material_warehousing JOIN mx_material_info ON proc_material_warehousing.material_id = mx_material_info.seq
-
-# 库存业务链
-- 库存主表→入库单:store JOIN store_in_list ON store.seq = store_in_list.store_seq
-- 库存主表→出库单:store JOIN store_out_list ON store.seq = store_out_list.store_seq
-- 库存→库存明细:store JOIN store_detail_list ON store.seq = store_detail_list.store_seq
-- 仓库→库位:storehouse JOIN storage ON storehouse.seq = storage.storehouse_id
-
-# 生产工艺链
-- 制造工艺→工序:sop_manufacturing_process JOIN sop_working_procedure ON sop_manufacturing_process.seq = sop_working_procedure.process_id
-- 车间工段→工序:sop_workshop_section JOIN sop_working_procedure ON sop_workshop_section.seq = sop_working_procedure.section_id
-
-# 成本报价链
-- 产品→标准成本:om_article JOIN t_standard_cost_budget ON om_article.seq = t_standard_cost_budget.art_id
-- 产品→物料成本:om_article JOIN t_material_cost ON om_article.seq = t_material_cost.art_id
-- 产品→模具成本:om_article JOIN t_mold_cost ON om_article.seq = t_mold_cost.art_id
-- 产品→客户报价:om_article JOIN t_customer_quotation ON om_article.seq = t_customer_quotation.art_id
-
-# 设备质量链
-- 设备OEE→设备数据:mac_oee JOIN ods_mac ON mac_oee.equipment_id = ods_mac.equipment_id
-- 设备→设备参数:ods_mac JOIN equip_parameter ON ods_mac.equipment_id = equip_parameter.equipment_id
-- 产品→良率报告:om_article JOIN po_report_yie_id ON om_article.seq = po_report_yie_id.art_id
-- 产品→不良品记录:om_article JOIN po_defective_product ON om_article.seq = po_defective_product.art_id
-
-**JOIN 注意事项**:
-- 大多数表使用 seq 作为主键
-- 关联字段通常命名为 {表名}_seq 或 {表名}_id
-- 注意区分 del_flag=0(未删除)和 is_available=0(可用)的记录
-- 多表关联时建议使用表别名(如 o, a, s)提高可读性
-
-### 角色和约束
-- **你的角色**: 你是一位融合了资深MySQL数据分析专家与数据可视化专家双重身份的AI助手。
-- **核心任务**: 根据用户的问题，安全、准确地生成并执行SQL查询，然后以清晰的"数据洞察"和"可视化图表配置"来呈现结果。
-- **安全第一**: 你的查询必须以 `SELECT` 开头。严禁生成任何修改性或定义性语句。
-- **基于事实**: 只能查询提供给你的表和字段，不允许猜测或虚构。
-- **主动沟通**: 如果用户问题模糊，必须主动提问以获取明确信息。
-
-### 工作流程
-1. **理解查询**: 分析用户问题，识别关键信息和意图
-2. **探索模式**: 使用 search_schema 工具查找相关表和字段
-3. **构建 SQL**: 生成准确的 SQL 查询语句
-4. **执行查询**: 使用 execute_sql 工具执行查询
-5. **分析结果**: 对查询结果进行数据分析和洞察
-6. **生成可视化**: 如果适合，生成 ECharts 配置
-
-### 图表生成规则
-1. **触发条件**: 当用户的提问中明确包含"图"、"表"、"趋势"、"分布"、"占比"等词语时，你**必须**生成图表配置。
-2. **图表类型选择**: 根据数据特点选择最合适的图表(折线图、柱状图、饼图等)。
-3. **配置格式**: 生成完整的 ECharts JSON 配置对象。
-
-### 可用工具
-- **execute_sql**: 执行 SQL SELECT 查询
-- **get_table_schema**: 获取表结构信息
-- **search_schema**: 搜索数据库模式
-- **search_knowledge**: 搜索业务知识库(如果可用)
-
-请始终遵循这些指导原则，提供准确、安全、有洞察力的数据分析服务。
+{few_shot_examples}
 """
 
+RESPONSE_GEN_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", RESPONSE_GEN_SYSTEM),
+    MessagesPlaceholder(variable_name="messages"),
+    ("human", """用户问题：{query}
 
-def get_sql_validation_prompt() -> str:
-    """获取 SQL 验证提示词"""
-    return """请验证以下 SQL 查询是否安全且符合规范:
+SQL 查询结果（JSON 格式）：{sql_result}
 
-1. 必须是 SELECT 语句
-2. 不能包含 DROP, DELETE, UPDATE, INSERT 等修改操作
-3. 不能包含危险的函数调用
-4. 语法必须正确
+请生成完整的分析报告。"""),
+])
 
-如果查询不安全或不符合规范，请说明原因并提供修正建议。
-"""
+# ============================================================
+# 导出常用常量
+# ============================================================
 
-
-def get_chart_generation_prompt() -> str:
-    """获取图表生成提示词"""
-    return """基于查询结果生成 ECharts 配置:
-
-1. 分析数据特征，选择最合适的图表类型
-2. 生成完整的 ECharts JSON 配置
-3. 确保配置符合 ECharts 5.x 规范
-4. 包含合适的标题、图例、工具提示等
-
-支持的图表类型:
-- 折线图:适合时间序列和趋势分析
-- 柱状图:适合分类比较
-- 饼图:适合占比分析
-- 散点图:适合相关性分析
-- 雷达图:适合多维度评估
-"""
+__all__ = [
+    "SCHEMA_CONTEXT",
+    "select_few_shot_examples",
+    "format_few_shot_examples",
+    "THINKING_PROMPT",
+    "SQL_GEN_PROMPT",
+    "RESPONSE_GEN_PROMPT",
+]

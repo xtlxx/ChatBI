@@ -1,0 +1,55 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Visual Validation Report</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 2rem; max-width: 1200px; margin: 0 auto; color: #1f2937; }
+    h1 { color: #111827; border-bottom: 2px solid #e5e7eb; padding-bottom: 0.5rem; }
+    .summary { display: flex; gap: 1rem; margin-bottom: 2rem; }
+    .card { padding: 1rem; border-radius: 0.5rem; border: 1px solid #e5e7eb; flex: 1; text-align: center; }
+    .card.total { background-color: #f3f4f6; }
+    .card.p0 { background-color: #fee2e2; border-color: #fca5a5; color: #991b1b; }
+    .card.p1 { background-color: #ffedd5; border-color: #fdba74; color: #9a3412; }
+    .card.p2 { background-color: #fef9c3; border-color: #fde047; color: #854d0e; }
+    .count { font-size: 2rem; font-weight: bold; display: block; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1); }
+    th { background-color: #f9fafb; text-align: left; padding: 0.75rem 1rem; font-weight: 600; border-bottom: 1px solid #e5e7eb; }
+    td { padding: 0.75rem 1rem; border-bottom: 1px solid #e5e7eb; }
+    tr:hover { background-color: #f9fafb; }
+    .badge { padding: 0.25rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 500; }
+    .badge-P0 { background-color: #fee2e2; color: #991b1b; }
+    .badge-P1 { background-color: #ffedd5; color: #9a3412; }
+    .badge-P2 { background-color: #fef9c3; color: #854d0e; }
+    code { background-color: #f3f4f6; padding: 0.2rem 0.4rem; border-radius: 0.25rem; font-family: monospace; font-size: 0.875rem; }
+    .file-path { color: #4b5563; font-size: 0.875rem; }
+  </style>
+</head>
+<body>
+  <h1>Visual Design Validation Report</h1>
+  <div class="summary">
+    <div class="card total"><span class="count">0</span>Total Issues</div>
+    <div class="card p0"><span class="count">0</span>P0 (Critical)</div>
+    <div class="card p1"><span class="count">0</span>P1 (High)</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Severity</th>
+        <th>File</th>
+        <th>Line</th>
+        <th>Issue</th>
+        <th>Value</th>
+        <th>Context</th>
+      </tr>
+    </thead>
+    <tbody>
+<tr><td colspan="6" style="text-align: center; padding: 2rem;">✅ No visual design issues found. Great job!</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top: 2rem; color: #6b7280; font-size: 0.875rem;">Generated at 2026/2/16 00:35:10</p>
+</body>
+</html>

@@ -1,11 +1,20 @@
 # models/db_connection.py
+# 数据库连接模型
+# 用于存储用户配置的数据库连接信息（加密存储密码）
 import enum
-from typing import Optional
-from sqlalchemy import String, Integer, ForeignKey, LargeBinary, Enum as SQLEnum
+import logging
+
+from sqlalchemy import Enum as SQLEnum
+from sqlalchemy import ForeignKey, Integer, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from utils.encryption import decrypt_password, encrypt_password
+
 from .base import Base
 from .user import User
-from utils.encryption import encrypt_password, decrypt_password
+
+logger = logging.getLogger(__name__)
+
 
 class DbType(str, enum.Enum):
     mysql = "mysql"
@@ -15,6 +24,7 @@ class DbType(str, enum.Enum):
     sqlite = "sqlite"
     oracle = "oracle"
     other = "other"
+
 
 class DbConnection(Base):
     __tablename__ = "db_connections"
@@ -36,8 +46,12 @@ class DbConnection(Base):
     def password(self) -> str:
         """获取解密后的密码（属性访问）"""
         if not self.encrypted_password:
-            raise ValueError("Password not set")
-        return decrypt_password(self.encrypted_password)
+            return ""
+        try:
+            return decrypt_password(self.encrypted_password)
+        except Exception as e:
+            logger.warning(f"Failed to decrypt password for connection {self.id}: {e}")
+            return ""
 
     @password.setter
     def password(self, plain_password: str):

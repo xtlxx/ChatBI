@@ -1,47 +1,42 @@
 # agent/tools.py
-"""
-Agent 工具定义
-包含数据库查询、RAG 检索等工具
-"""
-import json
-import decimal
+# 工具定义
+# 包含数据库查询、RAG 检索等工具
 import datetime
-from typing import Optional, Dict, Any, List, Union
+import decimal
+import json
+from typing import Any
+
+import sqlglot
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
-from tenacity import retry, stop_after_attempt, wait_exponential
 from sqlalchemy import text
+from sqlglot import exp
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-# === 配置与日志导入 ===
-try:
-    from logging_config import get_logger
-except ImportError:
-    # 兼容性 Fallback
-    try:
-        from ..logging_config import get_logger
-    except ImportError:
-        import logging
-        get_logger = logging.getLogger
+from agent.prompts import SOFT_DELETE_RULES
+from core.db_adapter import AdapterFactory
+from logging_config import get_logger
+from models.db_connection import DbType
 
 logger = get_logger(__name__)
-
 
 # === 工具输入模型 (Pydantic) ===
 
 class SQLQueryInput(BaseModel):
     """SQL 查询工具输入模型"""
+
     query: str = Field(
         description="要执行的 SQL 查询语句。必须是 SELECT 语句，严禁使用 INSERT/UPDATE/DELETE/DROP。"
     )
 
-
 class SchemaSearchInput(BaseModel):
     """数据库模式搜索工具输入模型"""
-    keywords: str = Field(description="搜索关键词，用于查找相关的表名、字段名或注释")
 
+    keywords: str = Field(description="搜索关键词，用于查找相关的表名、字段名或注释")
 
 class KnowledgeSearchInput(BaseModel):
     """知识库搜索工具输入模型"""
+
     query: str = Field(description="搜索查询，用于检索相关的业务知识和文档")
 
 
@@ -49,80 +44,228 @@ class KnowledgeSearchInput(BaseModel):
 
 def safe_serializer(obj: Any) -> Any:
     """JSON 序列化辅助函数，处理非标准类型"""
-    if isinstance(obj, (datetime.datetime, datetime.date)):
+    if isinstance(obj, datetime.datetime | datetime.date):
         return obj.isoformat()
     if isinstance(obj, decimal.Decimal):
         return float(obj)  # 或者 str(obj) 以保持精度
     return str(obj)
 
 
-def validate_sql_safety(query: str) -> Optional[str]:
+def validate_and_format_sql(sql: str, dialect: str = "postgres") -> str:
     """
-    简单的 SQL 安全检查
-    返回 None 表示通过，返回字符串表示错误信息
+    使用 sqlglot 进行严格的 AST 级别 SQL 校验和格式化
+    1. 安全沙箱：拦截所有 DDL/DML 操作 (Drop, Delete, Insert, Update 等)
+    2. 资源保护：强制为 SELECT 查询注入 LIMIT 100 (如果未指定)
+    3. 业务规则：保留软删除逻辑 (注入 is_deleted = 0)
     """
-    q = query.strip().upper()
-    if not q.startswith("SELECT") and not q.startswith("WITH"): # 支持 WITH 子句
-        return "安全拒绝: SQL 语句必须以 SELECT 或 WITH 开头"
+    if not sql or not sql.strip():
+        raise ValueError("SQL 内容为空")
 
-    # 黑名单关键词检查
-    forbidden = ["DROP ", "DELETE ", "UPDATE ", "INSERT ", "TRUNCATE ", "ALTER ", "GRANT ", "EXEC "]
-    for word in forbidden:
-        if word in q:
-            return f"安全拒绝: 包含禁止的关键词 '{word.strip()}'"
+    # 尝试解析 SQL
+    try:
+        # 1. 解析 AST
+        # 优先使用指定方言，如果失败尝试通用解析
+        try:
+            expression = sqlglot.parse_one(sql, read=dialect)
+        except Exception:
+            # Fallback: 尝试不指定方言（通用 SQL）
+            logger.warning(f"SQL 解析降级警告: 使用方言 {dialect} 解析失败，尝试通用模式。SQL: {sql[:50]}...")
+            expression = sqlglot.parse_one(sql)
+            
+    except Exception as e:
+        raise ValueError(f"SQL 解析失败 (Syntax Error): {str(e)}")
+
+    # 2. 安全检查：拦截非只读操作
+    forbidden_types = (
+        exp.Insert, exp.Update, exp.Delete, exp.Drop, exp.Alter,
+        exp.Create, exp.TruncateTable, exp.Grant, exp.Revoke, exp.Command
+    )
+
+    # 检查根节点
+    if isinstance(expression, forbidden_types):
+        raise ValueError(f"安全拦截: 禁止执行 {expression.key} 操作")
+
+    # 递归检查所有子节点 (防止 CTE 或子查询中隐藏恶意操作)
+    for node in expression.walk():
+        if isinstance(node, forbidden_types):
+            raise ValueError(f"安全拦截: 语句中包含禁止的操作 {node.key}")
+
+    # 3. 强制 LIMIT 策略 (防止全表扫描拖垮内存)
+    # 针对最外层的 SELECT 语句注入 LIMIT
+    if isinstance(expression, exp.Select):
+        limit_node = expression.args.get("limit")
+        if not limit_node:
+            # 强制追加 LIMIT 100 (根据需求从 1000 调整为 100)
+            expression = expression.limit(100)
+        else:
+            # 可选：如果用户写的 LIMIT 超过阈值，也可以在此强制覆盖
+            pass
+
+    # 4. 软删除策略注入 (保持业务逻辑一致性)
+    try:
+        cte_names = {cte.alias.lower() for cte in expression.find_all(exp.CTE)}
+        
+        for select_node in expression.find_all(exp.Select):
+            for table in select_node.find_all(exp.Table):
+                # 确保是当前 SELECT 语句直接引用的表
+                parent_select = table.parent
+                while parent_select and not isinstance(parent_select, exp.Select):
+                    parent_select = parent_select.parent
+                
+                if parent_select is not select_node:
+                    continue
+
+                table_name = table.name.lower()
+                if table_name in cte_names:
+                    continue
+
+                # 获取软删除字段配置
+                del_field, del_value = SOFT_DELETE_RULES.get('default', ('is_deleted', '0'))
+                for prefix, (field, value) in SOFT_DELETE_RULES.items():
+                    if prefix != 'default' and table_name.startswith(prefix):
+                        del_field, del_value = field, value
+                        break
+
+                # 注入 WHERE 条件
+                table_ref = table.alias or table.name
+                condition_str = f"{table_ref}.{del_field} = '{del_value}'"
+                
+                # 使用 sqlglot 构建条件表达式
+                condition_expr = sqlglot.parse_one(condition_str, read=dialect)
+                select_node.where(condition_expr, copy=False)
+                
+    except Exception as e:
+        logger.error(f"软删除策略注入失败: {e}")
+        # 策略注入失败不应阻断查询，但需记录警告 (或者根据安全要求阻断)
+        # 这里选择抛出异常以保证数据准确性
+        raise ValueError(f"无法应用业务过滤规则: {str(e)}")
+
+    # 返回重新生成的 SQL
+    return expression.sql(dialect=dialect)
+
+
+def load_lineage_metadata() -> dict[str, Any]:
+    """Load metadata.json generated by analysis script"""
+    import os
+    paths = ["metadata.json", "backend/metadata.json", "../metadata.json"]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load metadata from {p}: {e}")
+                return {}
+    return {}
+
+
+def validate_sql_integrity(query: str) -> str | None:
+    metadata = load_lineage_metadata()
+    if not metadata:
+        return None
+
+    try:
+        parsed = sqlglot.parse_one(query)
+    except Exception:
+        return None
+
+    cte_names = set()
+    for cte in parsed.find_all(exp.CTE):
+        cte_names.add(cte.alias_or_name)
+
+    tables_in_query = {}
+    for node in parsed.find_all(exp.Table):
+        table_name = node.name
+        alias = node.alias or table_name
+        if table_name in cte_names:
+            continue
+        if table_name.lower() in metadata.get("tables", {}):
+            tables_in_query[alias] = table_name.lower()
+        else:
+            return f"验证错误：表 '{table_name}' 不存在于数据库中。"
+
+    for node in parsed.find_all(exp.Column):
+        col_name = node.name
+        table_alias = node.table
+        if table_alias:
+            real_table = tables_in_query.get(table_alias)
+            if real_table:
+                table_meta = metadata["tables"][real_table]
+                valid_cols = {c["name"].lower() for c in table_meta["columns"]}
+                if col_name.lower() not in valid_cols and col_name != "*":
+                    return f"验证错误：列 '{col_name}' 不存在于表 '{real_table}' 中。"
+
     return None
 
 
 # === 工具实现 ===
 
+
 class DatabaseTools:
     """数据库相关工具集合"""
 
-    def __init__(self, db_engine):
+    def __init__(self, db_engine, db_type: DbType = DbType.mysql):
         self.db_engine = db_engine
+        self.db_type = db_type
+        self.adapter = AdapterFactory.get_adapter(db_type)
         self.logger = get_logger(self.__class__.__name__)
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        reraise=False  # 不抛出异常，而是返回错误 JSON
+        reraise=True,  # 重试耗尽后抛出异常，避免返回 None 引发幽灵 TypeError
     )
     async def execute_sql_query(self, query: str) -> str:
         """
         执行 SQL 查询并返回结果
         """
         try:
-            # 1. 安全检查
-            error_msg = validate_sql_safety(query)
-            if error_msg:
-                return json.dumps({"error": error_msg, "query": query}, ensure_ascii=False)
-
             self.logger.info("executing_sql_query", query=query[:200])
+
+            # 🌟 重构：使用 validate_and_format_sql 统一处理安全校验、LIMIT 和软删除 🌟
+            try:
+                # 传入 adapter 的 dialect (如 'mysql', 'postgres')
+                final_query = validate_and_format_sql(query, dialect=self.adapter.sqlglot_dialect)
+            except ValueError as ve:
+                # 捕获安全校验或解析错误，直接返回错误 JSON
+                return json.dumps({"error": str(ve), "query": query}, ensure_ascii=False)
+
+            # 1.5 方言适配 (Transpilation) - 如果 adapter 有额外的处理
+            # validate_and_format_sql 已经输出了对应 dialect 的 SQL，这里可能只是保险
+            final_query = self.adapter.transpile_sql(final_query)
+            
+            self.logger.info("sql_secured_and_formatted", final_query=final_query[:200])
 
             # 2. 执行查询
             async with self.db_engine.connect() as conn:
                 # 使用 text() 包装 SQL 字符串
-                result = await conn.execute(text(query))
+                result = await conn.execute(text(final_query))
 
                 # 获取列名
                 columns = result.keys()
-                rows = result.fetchall()
+
+                # 内存的第二道防线：限制 Python 端拉取的行数
+                # 既然 SQL 已经强制 LIMIT 100，这里可以设稍微大一点或者保持一致
+                limit = 200 
+                rows = result.fetchmany(limit + 1)
+
+                is_truncated = False
+                if len(rows) > limit:
+                    is_truncated = True
+                    rows = rows[:limit]
 
                 # 3. 数据转换
                 data = [dict(zip(columns, row)) for row in rows]
-                row_count = len(data)
-
-                # 限制返回行数，防止 Context 溢出
-                limit = 100
-                is_truncated = row_count > limit
+                row_count = len(data) if not is_truncated else f"{limit}+"
 
                 response = {
                     "success": True,
-                    "executed_sql": query,
+                    "executed_sql": final_query,
                     "row_count": row_count,
-                    "data": data[:limit],
+                    "data": data,
                     "truncated": is_truncated,
-                    "message": f"查询成功，共 {row_count} 行" + (" (仅显示前100行)" if is_truncated else "")
+                    "message": "查询成功"
+                    + (" (结果已截断)" if is_truncated else f"，共 {row_count} 行"),
                 }
 
                 self.logger.info("sql_query_executed", row_count=row_count)
@@ -131,32 +274,25 @@ class DatabaseTools:
 
         except Exception as e:
             self.logger.error("sql_query_failed", error=str(e), query=query[:200], exc_info=True)
-            return json.dumps({
-                "success": False,
-                "error": f"SQL 执行失败: {str(e)}",
-                "query": query
-            }, ensure_ascii=False)
+            return json.dumps(
+                {"success": False, "error": f"SQL 执行失败: {str(e)}", "query": query},
+                ensure_ascii=False,
+            )
 
     async def get_table_schema(self, table_name: str) -> str:
-        """
-        获取表结构信息
-        """
         try:
-            # 注意：此处使用参数化查询不太容易（表名不能参数化），
-            # 但 table_name 通常来自 Agent 内部决策。
-            # 仍需防止极其恶意的注入，虽然主要由 LLM 控制。
             clean_table_name = table_name.replace("'", "").replace(";", "").split()[0]
-
-            query = text("""
-            SELECT 
-                COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, 
+            query = text(
+                """
+            SELECT
+                COLUMN_NAME, DATA_TYPE, COLUMN_TYPE,
                 IS_NULLABLE, COLUMN_KEY, COLUMN_COMMENT
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME = :table_name
             ORDER BY ORDINAL_POSITION
-            """)
-
+            """
+            )
             async with self.db_engine.connect() as conn:
                 result = await conn.execute(query, {"table_name": clean_table_name})
                 rows = result.fetchall()
@@ -164,25 +300,41 @@ class DatabaseTools:
                 schema = [dict(zip(columns, row)) for row in rows]
 
                 if not schema:
-                    return json.dumps({"error": f"表 '{clean_table_name}' 不存在或无权限"}, ensure_ascii=False)
+                    return json.dumps(
+                        {"error": f"表 '{clean_table_name}' 不存在或无权限"}, ensure_ascii=False
+                    )
 
-                return json.dumps({
-                    "table": clean_table_name,
-                    "columns": schema
-                }, ensure_ascii=False, default=safe_serializer)
-
+                return json.dumps(
+                    {"table": clean_table_name, "columns": schema},
+                    ensure_ascii=False,
+                    default=safe_serializer,
+                )
         except Exception as e:
             self.logger.error("get_table_schema_failed", error=str(e), table=table_name)
             return json.dumps({"error": str(e)}, ensure_ascii=False)
 
-    async def search_schema(self, keywords: str) -> str:
-        """
-        搜索数据库模式中的表和字段
-        """
+    async def get_all_tables_info(self) -> str:
         try:
-            # 清理关键词，防止破坏 LIKE 语句
-            safe_kw = keywords.replace("'", "").replace("%", "")
+            query = text( """
+            SELECT TABLE_NAME, TABLE_COMMENT
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+            """
+            )
+            async with self.db_engine.connect() as conn:
+                result = await conn.execute(query)
+                rows = result.fetchall()
+                tables_info = []
+                for row in rows:
+                    tables_info.append(f"- {row[0]}: {row[1] or '无描述'}")
+                return "\n".join(tables_info)
+        except Exception as e:
+            self.logger.error("get_all_tables_info_failed", error=str(e))
+            return "无法获取数据库表列表"
 
+    async def search_schema(self, keywords: str) -> str:
+        try:
+            safe_kw = keywords.replace("'", "").replace("%", "")
             query = text("""
             SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_COMMENT
             FROM INFORMATION_SCHEMA.COLUMNS
@@ -193,20 +345,19 @@ class DatabaseTools:
                 OR COLUMN_COMMENT LIKE :kw
             )
             LIMIT 50
-            """)
-
+            """
+            )
             async with self.db_engine.connect() as conn:
                 result = await conn.execute(query, {"kw": f"%{safe_kw}%"})
                 rows = result.fetchall()
                 columns = result.keys()
                 matches = [dict(zip(columns, row)) for row in rows]
 
-                return json.dumps({
-                    "keyword": keywords,
-                    "matches": matches,
-                    "count": len(matches)
-                }, ensure_ascii=False, default=safe_serializer)
-
+                return json.dumps(
+                    {"keyword": keywords, "matches": matches, "count": len(matches)},
+                    ensure_ascii=False,
+                    default=safe_serializer,
+                )
         except Exception as e:
             self.logger.error("search_schema_failed", error=str(e), keywords=keywords)
             return json.dumps({"error": str(e)}, ensure_ascii=False)
@@ -220,20 +371,13 @@ class KnowledgeTools:
         self.logger = get_logger(self.__class__.__name__)
 
     async def search_knowledge(self, query: str) -> str:
-        """
-        搜索知识库
-        """
         try:
             if not self.retriever:
-                return json.dumps({
-                    "message": "知识库检索器未配置，无法搜索",
-                    "documents": []
-                }, ensure_ascii=False)
+                return json.dumps(
+                    {"message": "知识库检索器未配置，无法搜索", "documents": []}, ensure_ascii=False
+                )
 
             self.logger.info("searching_knowledge", query=query)
-
-            # 执行异步检索
-            # 注意：取决于你的 retriever 实现，可能是 aget_relevant_documents 或 ainvoke
             if hasattr(self.retriever, "ainvoke"):
                 docs = await self.retriever.ainvoke(query)
             else:
@@ -241,60 +385,53 @@ class KnowledgeTools:
 
             results = []
             for doc in docs:
-                results.append({
-                    "content": doc.page_content,
-                    "metadata": doc.metadata,
-                    # 尝试获取相关度分数
-                    "score": getattr(doc, "score", None) or doc.metadata.get("score")
-                })
+                results.append(
+                    {
+                        "content": doc.page_content,
+                        "metadata": doc.metadata,
+                        "score": getattr(doc, "score", None) or doc.metadata.get("score"),
+                    }
+                )
 
-            return json.dumps({
-                "query": query,
-                "documents": results,
-                "count": len(results)
-            }, ensure_ascii=False, default=safe_serializer)
+            return json.dumps(
+                {"query": query, "documents": results, "count": len(results)},
+                ensure_ascii=False,
+                default=safe_serializer,
+            )
 
         except Exception as e:
             self.logger.error("knowledge_search_failed", error=str(e), query=query)
             return json.dumps({"error": f"知识检索失败: {str(e)}"}, ensure_ascii=False)
 
 
-def create_tools(db_engine, retriever=None) -> List[StructuredTool]:
-    """
-    创建并返回 LangGraph Agent 所需的工具列表
-
-    Args:
-        db_engine: 异步数据库引擎 (SQLAlchemy AsyncEngine)
-        retriever: LangChain Retriever 实例
-    """
+def create_tools(db_engine, retriever=None) -> list[StructuredTool]:
     db_tools = DatabaseTools(db_engine)
     knowledge_tools = KnowledgeTools(retriever)
 
     tools = [
         StructuredTool.from_function(
-            func=None, # 同步 func 留空
+            func=None,
             coroutine=db_tools.execute_sql_query,
             name="execute_sql",
             description="执行 SQL 查询。只允许 SELECT 语句。返回 JSON 格式的数据结果。",
-            args_schema=SQLQueryInput
+            args_schema=SQLQueryInput,
         ),
         StructuredTool.from_function(
             func=None,
             coroutine=db_tools.get_table_schema,
             name="get_table_schema",
             description="查看指定表的详细结构（列名、类型、注释）。在编写 SQL 前必须使用此工具确认字段。",
-            args_schema=None # 使用默认推断，或如果只是单字符串参数可不写
+            args_schema=None,
         ),
         StructuredTool.from_function(
             func=None,
             coroutine=db_tools.search_schema,
             name="search_schema",
             description="模糊搜索数据库表和字段。当你不知道表名是什么时使用。",
-            args_schema=SchemaSearchInput
+            args_schema=SchemaSearchInput,
         ),
     ]
 
-    # 仅当 retriever 存在时添加知识库工具
     if retriever:
         tools.append(
             StructuredTool.from_function(
@@ -302,8 +439,6 @@ def create_tools(db_engine, retriever=None) -> List[StructuredTool]:
                 coroutine=knowledge_tools.search_knowledge,
                 name="search_knowledge",
                 description="搜索业务文档和知识库。用于理解业务术语、计算公式或特殊规则。",
-                args_schema=KnowledgeSearchInput
+                args_schema=KnowledgeSearchInput,
             )
         )
-    
-    return tools
