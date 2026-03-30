@@ -257,6 +257,11 @@ async def stream_agent_with_cleanup(
                 error_msg = event.get("content")
             yield f"data: {json.dumps(event, cls=SafeJSONEncoder, ensure_ascii=False)}\n\n"
         is_completed = True
+    except asyncio.CancelledError:
+        logger.warning(f"流意外中断 (CancelledError): 客户端可能已断开连接 session_{session_id}")
+        error_msg = "流意外中断: 客户端已断开连接"
+        # 客户端断开时不应再 yield，直接进入 finally 处理持久化
+        raise
     except Exception as e:
         logger.error(f"流处理错误: {e}", exc_info=True)
         error_msg = str(e)
@@ -264,6 +269,7 @@ async def stream_agent_with_cleanup(
         yield f"data: {json.dumps({'type': 'error', 'content': error_content, 'done': True}, ensure_ascii=False)}\n\n"
     finally:
         execution_time = time.time() - start_time
+        # 关键：先执行数据库保存，不依赖 yield，保证持久化绝对执行
         try:
             content_to_save = full_answer if full_answer else (error_msg or "无回答")
             msg_metadata = {
@@ -276,13 +282,18 @@ async def stream_agent_with_cleanup(
             await save_chat_message(system_db, session_id, "ai", content_to_save, user_id, msg_metadata)
         except Exception as e:
             logger.error(f"保存消息失败: {e}")
-        yield f"data: {json.dumps({'type': 'execution_time', 'content': f'{execution_time:.2f}秒'}, cls=SafeJSONEncoder, ensure_ascii=False)}\n\n"
-
-        if not is_completed and not error_msg:
-             yield f"data: {json.dumps({'type': 'error', 'content': '流意外中断', 'done': True}, ensure_ascii=False)}\n\n"
-        else:
-            # ✅ 关键修复：始终发送 end 事件通知前端流已结束（解锁 isLoading 状态）
-            yield f"data: {json.dumps({'type': 'end', 'content': '完成', 'done': True}, cls=SafeJSONEncoder, ensure_ascii=False)}\n\n"
+            
+        # 仅在连接未断开时发送结束信号
+        if not asyncio.current_task().cancelled():
+            try:
+                yield f"data: {json.dumps({'type': 'execution_time', 'content': f'{execution_time:.2f}秒'}, cls=SafeJSONEncoder, ensure_ascii=False)}\n\n"
+                if not is_completed and not error_msg:
+                     yield f"data: {json.dumps({'type': 'error', 'content': '流意外中断', 'done': True}, ensure_ascii=False)}\n\n"
+                else:
+                    # ✅ 关键修复：始终发送 end 事件通知前端流已结束（解锁 isLoading 状态）
+                    yield f"data: {json.dumps({'type': 'end', 'content': '完成', 'done': True}, cls=SafeJSONEncoder, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                logger.error(f"发送最终流状态失败: {e}")
 
 @app.get("/", tags=["Root"])
 async def root():

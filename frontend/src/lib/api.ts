@@ -9,7 +9,7 @@ const api = axios.create({
   },
 });
 
-// Request Interceptor
+// 请求拦截器
 api.interceptors.request.use(
   (config) => {
     const token = useAuthStore.getState().token;
@@ -23,22 +23,17 @@ api.interceptors.request.use(
   }
 );
 
-// Response Interceptor
+// 响应拦截器
 api.interceptors.response.use(
   (response) => {
     return response;
   },
   (error) => {
-    const { response } = error;
-    if (response) {
-      if (response.status === 401) {
-        // Unauthorized - clear auth and redirect
-        useAuthStore.getState().logout();
-        // Window location redirect is a crude fallback, ideally use router
-        if (!window.location.pathname.includes('/login')) {
-            window.location.href = '/login';
-        }
-      }
+    if (error.response?.status === 401) {
+      // Unauthorized - clear auth and redirect
+      useAuthStore.getState().logout();
+      // 发送自定义事件而非强制刷新页面
+      window.dispatchEvent(new CustomEvent('unauthorized'));
     }
     return Promise.reject(error);
   }

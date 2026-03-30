@@ -95,8 +95,8 @@ def validate_and_format_sql(sql: str, dialect: str = "postgres") -> str:
     if isinstance(expression, exp.Select):
         limit_node = expression.args.get("limit")
         if not limit_node:
-            # 强制追加 LIMIT 100 (根据需求从 1000 调整为 100)
-            expression = expression.limit(100)
+            # 强制追加 LIMIT 101 (设定为探测阈值+1，以判断是否发生截断)
+            expression = expression.limit(101)
         else:
             # 可选：如果用户写的 LIMIT 超过阈值，也可以在此强制覆盖
             pass
@@ -245,8 +245,8 @@ class DatabaseTools:
                 columns = result.keys()
 
                 # 内存的第二道防线：限制 Python 端拉取的行数
-                # 既然 SQL 已经强制 LIMIT 100，这里可以设稍微大一点或者保持一致
-                limit = 200 
+                # 既然 SQL 已经强制 LIMIT 100，这里保持一致
+                limit = 100 
                 rows = result.fetchmany(limit + 1)
 
                 is_truncated = False

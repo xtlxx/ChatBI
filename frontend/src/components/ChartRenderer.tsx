@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { Maximize2, Minimize2, Download, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -12,10 +12,11 @@ interface ChartRendererProps {
 export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
   const { t } = useTranslation();
   const chartRef = useRef<ReactECharts>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Validate chart option
-  const validatedOption = (() => {
+  const validatedOption = useMemo(() => {
     if (!option || typeof option !== 'object') return null;
     const opt = option as Record<string, unknown>;
 
@@ -25,40 +26,41 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
     }
 
     return opt;
-  })();
+  }, [option]);
 
-  // Apply dark mode adaptive theme
-  const themeOverrides = {
-    backgroundColor: 'transparent',
-    textStyle: {
-      color: 'var(--foreground, #1f2937)',
-      fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-      fontSize: 14,
-    },
-    // Modern color palette
-    color: [
-      '#3b82f6', // blue-500
-      '#10b981', // emerald-500
-      '#f59e0b', // amber-500
-      '#ef4444', // red-500
-      '#8b5cf6', // violet-500
-      '#ec4899', // pink-500
-      '#6366f1', // indigo-500
-      '#14b8a6', // teal-500
-    ],
-    animation: true,
-    animationDuration: 1000,
-    animationEasing: 'cubicOut',
-    grid: {
-      top: 40,
-      right: 20,
-      bottom: 40,
-      left: 20,
-      containLabel: true
-    }
-  };
-
-  const mergedOption = validatedOption ? { ...themeOverrides, ...validatedOption } : null;
+  const mergedOption = useMemo(() => {
+    if (!validatedOption) return null;
+    const themeOverrides = {
+      backgroundColor: 'transparent',
+      textStyle: {
+        color: 'var(--foreground, #1f2937)',
+        fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+        fontSize: 14,
+      },
+      // Modern color palette
+      color: [
+        '#3b82f6', // blue-500
+        '#10b981', // emerald-500
+        '#f59e0b', // amber-500
+        '#ef4444', // red-500
+        '#8b5cf6', // violet-500
+        '#ec4899', // pink-500
+        '#6366f1', // indigo-500
+        '#14b8a6', // teal-500
+      ],
+      animation: true,
+      animationDuration: 1000,
+      animationEasing: 'cubicOut',
+      grid: {
+        top: 40,
+        right: 20,
+        bottom: 40,
+        left: 20,
+        containLabel: true
+      }
+    };
+    return { ...themeOverrides, ...validatedOption };
+  }, [validatedOption]);
 
   // Calculate error state based on validated option
   const hasError = !validatedOption;
@@ -66,7 +68,15 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
 
   // Toggle fullscreen
   const toggleFullscreen = useCallback(() => {
-    setIsFullscreen(prev => !prev);
+    if (!document.fullscreenElement) {
+      containerRef.current?.requestFullscreen().catch(err => {
+        console.error(`Error attempting to enable fullscreen: ${err.message}`);
+      });
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
   }, []);
 
   // Download chart as image
@@ -93,18 +103,33 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
     }
   }, []);
 
-  // Handle ESC key for fullscreen
+  // 使用 ResizeObserver 实现图表的响应式渲染
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isFullscreen) {
-        setIsFullscreen(false);
-      }
+    if (!containerRef.current) return;
+
+    const resizeObserver = new ResizeObserver(() => {
+      // 添加一个小延迟，确保 DOM 更新完成后再调整尺寸
+      requestAnimationFrame(() => {
+        refreshChart();
+      });
+    });
+
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, [refreshChart]);
+
+  // 处理全屏变化
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+      // Resize is now handled by ResizeObserver, but keeping this as a fallback
+      setTimeout(() => {
+        refreshChart();
+      }, 100);
     };
-    if (isFullscreen) {
-      document.addEventListener('keydown', handleKeyDown);
-      return () => document.removeEventListener('keydown', handleKeyDown);
-    }
-  }, [isFullscreen]);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, [refreshChart]);
 
   if (hasError || !mergedOption) {
     return (
@@ -118,7 +143,10 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
   }
 
   const chartContent = (
-    <div className={`relative group ${isFullscreen ? 'fixed inset-0 z-50 bg-background/95 backdrop-blur-sm p-8' : 'w-full h-full'}`}>
+    <div 
+      ref={containerRef}
+      className={`relative group w-full h-full ${isFullscreen ? 'bg-background p-8' : ''}`}
+    >
       {/* Toolbar */}
       <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
         <button
@@ -144,7 +172,7 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
         </button>
       </div>
 
-      {/* Fullscreen close overlay */}
+      {/* 全屏关闭遮罩提示 */}
       {isFullscreen && (
         <button
           onClick={toggleFullscreen}
@@ -162,7 +190,7 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
         notMerge={true}
         lazyUpdate={true}
         onEvents={{
-          // Enable click interaction
+          // 启用点击交互
           click: (params: { name?: string; value?: unknown; seriesName?: string }) => {
             console.log('Chart clicked:', params.name, params.value, params.seriesName);
           }

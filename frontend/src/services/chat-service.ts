@@ -1,5 +1,6 @@
 import api from '@/lib/api';
 import i18n from '@/lib/i18n';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
 import type { 
   ChatSession, 
   SessionCreate, 
@@ -34,18 +35,23 @@ export const chatService = {
     return response.data;
   },
 
+  deleteSession: async (sessionId: string) => {
+    await api.delete(`/chat/sessions/${sessionId}`);
+  },
+
   // Non-streaming query
   sendMessage: async (data: QueryRequest) => {
     const response = await api.post<QueryResponse>('/query', data);
     return response.data;
   },
 
-  // Streaming query
+  // 流式查询请求
   sendMessageStream: async (
     data: QueryRequest, 
     onChunk: (event: StreamEvent) => void,
     onError: (err: Error) => void,
-    onComplete: () => void
+    onComplete: () => void,
+    signal?: AbortSignal
   ) => {
     try {
       const token = useAuthStore.getState().token;
@@ -53,110 +59,86 @@ export const chatService = {
         throw new Error(i18n.t('errors.unauthorized'));
       }
       
-      console.log('[ChatService] Starting stream request to /api/query/stream');
+      console.log('[ChatService] 开始流请求: /api/query/stream');
       
-      // Use the dedicated streaming endpoint for better feature support (e.g. few-shot)
-      const response = await fetch('/api/query/stream', {
+      let hasReceivedData = false;
+      
+      // 确保URL中不重复包含 /api
+      let url = '/api/query/stream';
+      if (api.defaults.baseURL && api.defaults.baseURL !== '/api') {
+          url = `${api.defaults.baseURL}/query/stream`.replace(/\/\//g, '/');
+      }
+
+      await fetchEventSource(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify(data),
-      });
-
-      if (!response.ok) {
-        if (response.status === 401) {
+        signal,
+        async onopen(response) {
+          if (response.ok) {
+            return; // 所有正常，继续处理
+          }
+          
+          if (response.status === 401) {
             useAuthStore.getState().logout();
-            window.location.href = '/login';
+            window.dispatchEvent(new CustomEvent('unauthorized'));
             throw new Error(i18n.t('errors.unauthorized'));
-        }
+          }
 
-        const errorText = await response.text();
-        console.error(`Stream request failed: status=${response.status} statusText=${response.statusText} body=${errorText}`);
-        let errorMsg = i18n.t('errors.streamFailed');
-        try {
-            const errorJson = JSON.parse(errorText);
-            if (errorJson.detail) errorMsg = errorJson.detail;
-        } catch (e) {
-            console.error('Failed to parse error response:', errorText);
-        }
-        throw new Error(`Stream request failed (${response.status}): ${errorMsg}`);
-      }
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      if (!reader) throw new Error(i18n.t('errors.noResponseBody'));
-
-      // 增加一个标记，用于检测是否真的收到了数据
-      let hasReceivedData = false;
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          
+          const errorText = await response.text();
+          console.error(`流请求失败: status=${response.status} statusText=${response.statusText} body=${errorText}`);
+          let errorMsg = i18n.t('errors.streamFailed');
+          try {
+              const errorJson = JSON.parse(errorText);
+              if (errorJson.detail) errorMsg = errorJson.detail;
+          } catch (e) {
+              console.error('解析错误响应失败::', errorText);
+          }
+          throw new Error(`流请求失败: (${response.status}): ${errorMsg}`);
+        },
+        onmessage(msg) {
           hasReceivedData = true;
-          const chunk = decoder.decode(value, { stream: true });
-          buffer += chunk;
-          
-          const lines = buffer.split('\n\n');
-          // Keep the last part if it's incomplete
-          buffer = lines.pop() || ''; 
-          
-          for (const line of lines) {
-             if (line.trim().startsWith('data: ')) {
-                 const jsonStr = line.trim().substring(6);
-                 try {
-                     const event = JSON.parse(jsonStr) as StreamEvent;
-                     onChunk(event);
-                     
-                     // Handle explicit done signal from backend
-                     if (event.done) {
-                         return onComplete();
-                     }
-                 } catch (e) {
-                     console.error('Failed to parse SSE JSON', e);
-                 }
-             }
+          try {
+            const event = JSON.parse(msg.data) as StreamEvent;
+            onChunk(event);
+            
+            // explicit 处理显式done信号
+            if (event.done) {
+               // 库会在不抛出错误时自动关闭连接
+            }
+          } catch (e) {
+            console.error('解析 SSE JSON 失败', e, msg.data);
           }
-        }
-        
-        // Process any remaining buffer
-        if (buffer.trim()) {
-          const lines = buffer.split('\n\n');
-          for (const line of lines) {
-              if (line.trim().startsWith('data: ')) {
-                  const jsonStr = line.trim().substring(6);
-                  try {
-                      const event = JSON.parse(jsonStr) as StreamEvent;
-                      onChunk(event);
-                  } catch (e) {
-                      console.error('Failed to parse SSE JSON from remaining buffer', e);
-                  }
-              }
+        },
+        onclose() {
+          onComplete();
+        },
+        onerror(err) {
+          if (signal?.aborted) {
+            return; // 用户取消，不处理错误信号
           }
-        }
-        
-        onComplete();
-      } catch (error: any) {
-         console.error("Stream reading error:", error);
-         // 如果已经收到了数据，但中途断开，可能是一个不完整的流
-         // 这种情况下，我们抛出一个特定的错误，或者只是让前端显示"网络中断"
-         if (hasReceivedData) {
-             // 尝试通知 UI 流被中断了，但保留已有的内容
+          console.error("流取错误:", err);
+          if (hasReceivedData) {
              onChunk({
                  type: 'error',
                  content: '\n\n*(网络连接已中断，以上为部分生成内容)*',
                  done: true
              } as any);
-         } else {
-             throw error;
-         }
+             return; // 不抛出错误，停止重试尝试
+          }
+          throw err; // 触发 onError处理
+        }
+      });
+      
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        console.log('用户取消流');
+        onComplete();
+        return;
       }
-    } catch (err) {
       onError(err instanceof Error ? err : new Error(String(err)));
     }
   }
