@@ -13,7 +13,7 @@ import { cleanMarkdownContent } from '@/lib/utils';
 import type { Message } from '@/types/chat';
 import { useSmoothStream } from '@/hooks/useSmoothStream';
 
-// SQL Syntax Highlighter for Markdown code blocks
+// Markdown 代码块中的 SQL 语法高亮器
 function highlightSQLInMarkdown(code: string): string {
   const keywords = [
     'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
@@ -38,40 +38,41 @@ function highlightSQLInMarkdown(code: string): string {
 
   let result = code;
 
-  // Escape HTML
+  // 转义 HTML，防止 XSS
   result = result.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  // Highlight strings (single-quoted)
+  // 高亮单引号字符串
   result = result.replace(
     /('(?:[^'\\]|\\.)*')/g,
     '<span class="sql-string">$1</span>'
   );
 
-  // Highlight numbers
+  // 高亮数字，包括小数
   result = result.replace(
     /\b(\d+(?:\.\d+)?)\b/g,
     '<span class="sql-number">$1</span>'
   );
 
-  // Highlight comments
+  // 高亮注释
   result = result.replace(
     /(--.*$)/gm,
     '<span class="sql-comment">$1</span>'
   );
 
-  // Highlight keywords (case insensitive, whole word)
+  // 高亮关键词（不区分大小写，完整匹配）
   for (const kw of keywords) {
     const regex = new RegExp(`\\b(${kw})\\b`, 'gi');
     result = result.replace(regex, '<span class="sql-keyword">$1</span>');
   }
 
-  // Highlight functions
+  // 高亮函数（不区分大小写，完整匹配）
   for (const fn of functions) {
     const regex = new RegExp(`\\b(${fn})\\s*(?=\\()`, 'gi');
     result = result.replace(regex, '<span class="sql-function">$1</span>');
   }
 
-  // Highlight backtick-quoted identifiers
+  // 高亮反引号字符串（标识符） ，包括空格
+  // 注意：这与 SQL 语法不同，SQL 只允许反引号字符串（不包含空格）或单引号字符串
   result = result.replace(
     /(`[^`]+`)/g,
     '<span class="sql-identifier">$1</span>'
@@ -324,7 +325,8 @@ content={(msg.thinking || '') + (msg.sqlThought ? '\n\n**技术思考 (SQL Strat
                                         <span>{t('chat.status.failed')}</span>
                                     </div>
                                     
-                                    {msg.content && (
+                                    {/* 仅当 content 不是通过降级生成的长篇 Markdown 报告时才在此处显示，避免重复 */}
+                                    {msg.content && !msg.content.includes('⚠️ **系统提示**') && (
                                         <div className="text-xs text-red-600/90 dark:text-red-300/90 bg-white/50 dark:bg-black/20 p-3 rounded border border-red-100 dark:border-red-900/30 font-mono whitespace-pre-wrap break-all max-h-60 overflow-y-auto">
                                             {msg.content}
                                         </div>
