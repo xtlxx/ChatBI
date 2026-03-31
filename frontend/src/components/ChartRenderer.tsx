@@ -108,14 +108,18 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
     if (!containerRef.current) return;
 
     const resizeObserver = new ResizeObserver(() => {
-      // 添加一个小延迟，确保 DOM 更新完成后再调整尺寸
+      // 使用 requestAnimationFrame 优化性能
       requestAnimationFrame(() => {
         refreshChart();
       });
     });
 
+    // 只监听容器宽度的变化，避免不必要的触发
     resizeObserver.observe(containerRef.current);
-    return () => resizeObserver.disconnect();
+    
+    return () => {
+      resizeObserver.disconnect();
+    };
   }, [refreshChart]);
 
   // 处理全屏变化
