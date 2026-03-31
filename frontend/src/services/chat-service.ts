@@ -77,38 +77,41 @@ export const chatService = {
         },
         body: JSON.stringify(data),
         signal,
-        async onopen(response) {
+        async onopen(response: Response) {
           if (response.ok) {
-            return; // 所有正常，继续处理
+            console.log('[ChatService] 连接成功');
+            return; // 一切正常
           }
-          
           if (response.status === 401) {
             useAuthStore.getState().logout();
             window.dispatchEvent(new CustomEvent('unauthorized'));
             throw new Error(i18n.t('errors.unauthorized'));
           }
-
-          const errorText = await response.text();
-          console.error(`流请求失败: status=${response.status} statusText=${response.statusText} body=${errorText}`);
-          let errorMsg = i18n.t('errors.streamFailed');
-          try {
-              const errorJson = JSON.parse(errorText);
-              if (errorJson.detail) errorMsg = errorJson.detail;
-          } catch (e) {
-              console.error('解析错误响应失败::', errorText);
+          if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+            throw new Error(`请求错误: ${response.status} ${response.statusText}`);
           }
-          throw new Error(`流请求失败: (${response.status}): ${errorMsg}`);
+          throw new Error(`服务器错误: ${response.status} ${response.statusText}`);
         },
-        onmessage(msg) {
-          hasReceivedData = true;
+        onmessage(msg: any) {
           try {
-            const event = JSON.parse(msg.data) as StreamEvent;
-            onChunk(event);
-            
-            // explicit 处理显式done信号
-            if (event.done) {
-               // 库会在不抛出错误时自动关闭连接
+            // 处理不同的事件类型
+            if (msg.event === 'ping') {
+              console.log('[ChatService] 收到 ping:', msg.data);
+              return;
             }
+            
+            if (msg.event === 'error') {
+              throw new Error(msg.data || '流处理错误');
+            }
+            
+            // 忽略非数据消息或空消息
+            if (!msg.data || msg.data === '[DONE]') {
+              return;
+            }
+
+            hasReceivedData = true;
+            const parsedData = JSON.parse(msg.data) as StreamEvent;
+            onChunk(parsedData);
           } catch (e) {
             console.error('解析 SSE JSON 失败', e, msg.data);
           }
@@ -116,7 +119,7 @@ export const chatService = {
         onclose() {
           onComplete();
         },
-        onerror(err) {
+        onerror(err: Error | any) {
           if (signal?.aborted) {
             return; // 用户取消，不处理错误信号
           }
