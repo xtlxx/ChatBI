@@ -24,16 +24,26 @@ api.interceptors.request.use(
 );
 
 // 响应拦截器
+let isUnauthorizedHandled = false;
+
 api.interceptors.response.use(
   (response) => {
     return response;
   },
   (error) => {
     if (error.response?.status === 401) {
-      // Unauthorized - clear auth and redirect
-      useAuthStore.getState().logout();
-      // 发送自定义事件而非强制刷新页面
-      window.dispatchEvent(new CustomEvent('unauthorized'));
+      if (!isUnauthorizedHandled) {
+        isUnauthorizedHandled = true;
+        // Unauthorized - clear auth and redirect
+        useAuthStore.getState().logout();
+        // 发送自定义事件而非强制刷新页面
+        window.dispatchEvent(new CustomEvent('unauthorized'));
+        
+        // 简单防抖：一段时间后允许再次触发
+        setTimeout(() => {
+          isUnauthorizedHandled = false;
+        }, 1000);
+      }
     }
     return Promise.reject(error);
   }
