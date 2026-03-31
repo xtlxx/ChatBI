@@ -260,8 +260,8 @@ async def stream_agent_with_cleanup(
     except asyncio.CancelledError:
         logger.warning(f"流意外中断 (CancelledError): 客户端可能已断开连接 session_{session_id}")
         error_msg = "流意外中断: 客户端已断开连接"
-        # 客户端断开时不应再 yield，直接进入 finally 处理持久化
-        raise
+        # 客户端断开时不应再 yield，直接 return，让 finally 处理持久化
+        return
     except Exception as e:
         logger.error(f"流处理错误: {e}", exc_info=True)
         error_msg = str(e)
