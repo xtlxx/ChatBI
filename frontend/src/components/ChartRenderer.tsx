@@ -15,12 +15,12 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Validate chart option
+  // 验证图表配置
   const validatedOption = useMemo(() => {
     if (!option || typeof option !== 'object') return null;
     const opt = option as Record<string, unknown>;
 
-    // Must have series or dataset
+    // 图表配置必须包含 series 或 dataset 中的一个
     if (!opt.series && !opt.dataset) {
       return null;
     }
@@ -122,7 +122,6 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
   useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
-      // Resize is now handled by ResizeObserver, but keeping this as a fallback
       setTimeout(() => {
         refreshChart();
       }, 100);
