@@ -64,13 +64,19 @@ def validate_and_format_sql(sql: str, dialect: str = "postgres") -> str:
     # 尝试解析 SQL
     try:
         # 1. 解析 AST
-        # 优先使用指定方言，如果失败尝试通用解析
+        # 优先使用指定方言，如果失败尝试通用解析或 transpile
         try:
             expression = sqlglot.parse_one(sql, read=dialect)
         except Exception:
-            # Fallback: 尝试不指定方言（通用 SQL）
+            # Fallback: 尝试使用更宽松的方言（如 postgres 常常被当作通用标准）进行解析并转译
             logger.warning(f"SQL 解析降级警告: 使用方言 {dialect} 解析失败，尝试通用模式。SQL: {sql[:50]}...")
-            expression = sqlglot.parse_one(sql)
+            try:
+                # 尝试通过 transpile 将其转回目标方言的 AST
+                transpiled_sql = sqlglot.transpile(sql, write=dialect)[0]
+                expression = sqlglot.parse_one(transpiled_sql, read=dialect)
+            except Exception:
+                # 如果转译也失败，退回默认无方言解析
+                expression = sqlglot.parse_one(sql)
             
     except Exception as e:
         raise ValueError(f"SQL 解析失败 (Syntax Error): {str(e)}")
@@ -254,8 +260,17 @@ class DatabaseTools:
                     is_truncated = True
                     rows = rows[:limit]
 
-                # 3. 数据转换
-                data = [dict(zip(columns, row)) for row in rows]
+                # 3. 数据转换与敏感字段过滤
+                sensitive_keywords = {"password", "secret", "key", "token", "hash", "pwd", "salt"}
+                data = []
+                for row in rows:
+                    row_dict = dict(zip(columns, row))
+                    filtered_dict = {
+                        k: v for k, v in row_dict.items() 
+                        if not any(kw in k.lower() for kw in sensitive_keywords)
+                    }
+                    data.append(filtered_dict)
+                    
                 row_count = len(data) if not is_truncated else f"{limit}+"
 
                 response = {
