@@ -62,11 +62,11 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
     return { ...themeOverrides, ...validatedOption };
   }, [validatedOption]);
 
-  // Calculate error state based on validated option
+  // 根据已验证的图表配置计算错误状态
   const hasError = !validatedOption;
   const errorMsg = hasError ? t('chart.error') : '';
 
-  // Toggle fullscreen
+  // 切换全屏
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
       containerRef.current?.requestFullscreen().catch(err => {
@@ -79,7 +79,7 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
     }
   }, []);
 
-  // Download chart as image
+  // 下载图表为图片
   const downloadChart = useCallback(() => {
     const chart = chartRef.current?.getEchartsInstance();
     if (chart) {
@@ -95,7 +95,7 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
     }
   }, []);
 
-  // Refresh/resize chart
+  // 刷新/调整图表尺寸
   const refreshChart = useCallback(() => {
     const chart = chartRef.current?.getEchartsInstance();
     if (chart) {
@@ -147,7 +147,7 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
       ref={containerRef}
       className={`relative group w-full h-full ${isFullscreen ? 'bg-background p-8' : ''}`}
     >
-      {/* Toolbar */}
+      {/* 图表工具栏（仅在非全屏下显示） */}
       <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
         <button
           onClick={refreshChart}
