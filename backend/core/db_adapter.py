@@ -193,7 +193,6 @@ class DatabaseDetector:
     def detect_type(url: str) -> DbType:
         """
         基于 URL 模式的简单启发式检测。
-        真实检测可能需要连接并检查 `version()`。
         """
         url_lower = url.lower()
         if "mysql" in url_lower:
@@ -206,8 +205,6 @@ class DatabaseDetector:
             return DbType.oracle
         elif "sqlite" in url_lower:
             return DbType.sqlite
-        elif "clickhouse" in url_lower:
-            return DbType.clickhouse
         else:
             return DbType.other
 
@@ -218,15 +215,21 @@ class DatabaseDetector:
         集中目前位于 agent_factory.py 中的逻辑。
         """
         from urllib.parse import quote_plus
+        
+        # SQLite 不需要用户名密码主机端口
+        if db_config.type == DbType.sqlite:
+            adapter = AdapterFactory.get_adapter(db_config.type)
+            return f"{adapter.driver_name}:///{db_config.database_name}"
 
-        password = quote_plus(db_config.password)
-        username = quote_plus(db_config.username)
+        # 确保其他数据库具有必要的连接信息
+        if not all([db_config.username, db_config.password, db_config.host, db_config.port, db_config.database_name]):
+            raise ValueError("数据库连接信息不完整")
+
+        password = quote_plus(str(db_config.password))
+        username = quote_plus(str(db_config.username))
 
         adapter = AdapterFactory.get_adapter(db_config.type)
         driver = adapter.driver_name
-
-        if db_config.type == DbType.sqlite:
-            return f"{driver}:///{db_config.database_name}"
 
         url = f"{driver}://{username}:{password}@{db_config.host}:{db_config.port}/{db_config.database_name}"
 
