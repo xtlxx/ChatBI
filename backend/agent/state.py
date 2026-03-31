@@ -5,13 +5,14 @@ import operator
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
 
 
 class AgentState(TypedDict):
     # ── 核心输入 ──
     query: str                                             # 用户原始问题
     session_id: str                                        # 会话标识
-    messages: Annotated[list[BaseMessage], operator.add]   # 完整对话历史
+    messages: Annotated[list[BaseMessage], add_messages]   # 完整对话历史，使用 add_messages 实现去重和智能合并
     metadata: dict[str, Any]                               # few_shot_examples、user_id 等
 
     # ── 流程控制 ──
