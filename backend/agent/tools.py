@@ -281,23 +281,31 @@ class DatabaseTools:
 
     async def get_table_schema(self, table_name: str) -> str:
         try:
-            clean_table_name = table_name.replace("'", "").replace(";", "").split()[0]
-            query = text(
-                """
-            SELECT
-                COLUMN_NAME, DATA_TYPE, COLUMN_TYPE,
-                IS_NULLABLE, COLUMN_KEY, COLUMN_COMMENT
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-            AND TABLE_NAME = :table_name
-            ORDER BY ORDINAL_POSITION
-            """
-            )
+            clean_table_name = table_name.strip()
+            
+            def _sync_inspect(connection):
+                from sqlalchemy import inspect
+                inspector = inspect(connection)
+                
+                # 检查表是否存在
+                if not inspector.has_table(clean_table_name):
+                    return None
+                    
+                columns = inspector.get_columns(clean_table_name)
+                
+                # 统一格式化输出，保持与原接口一致的键名
+                schema = []
+                for col in columns:
+                    schema.append({
+                        "COLUMN_NAME": col.get("name"),
+                        "DATA_TYPE": str(col.get("type")),
+                        "IS_NULLABLE": "YES" if col.get("nullable", True) else "NO",
+                        "COLUMN_COMMENT": col.get("comment") or ""
+                    })
+                return schema
+
             async with self.db_engine.connect() as conn:
-                result = await conn.execute(query, {"table_name": clean_table_name})
-                rows = result.fetchall()
-                columns = result.keys()
-                schema = [dict(zip(columns, row)) for row in rows]
+                schema = await conn.run_sync(_sync_inspect)
 
                 if not schema:
                     return json.dumps(
@@ -315,43 +323,81 @@ class DatabaseTools:
 
     async def get_all_tables_info(self) -> str:
         try:
-            query = text( """
-            SELECT TABLE_NAME, TABLE_COMMENT
-            FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_SCHEMA = DATABASE()
-            """
-            )
-            async with self.db_engine.connect() as conn:
-                result = await conn.execute(query)
-                rows = result.fetchall()
+            def _sync_inspect(connection):
+                from sqlalchemy import inspect
+                inspector = inspect(connection)
+                tables = inspector.get_table_names()
+                
                 tables_info = []
-                for row in rows:
-                    tables_info.append(f"- {row[0]}: {row[1] or '无描述'}")
+                for table in tables:
+                    # SQLAlchemy inspect 提供了 get_table_comment
+                    try:
+                        comment = inspector.get_table_comment(table).get("text", "无描述")
+                    except Exception:
+                        comment = "无描述"
+                    tables_info.append(f"- {table}: {comment or '无描述'}")
                 return "\n".join(tables_info)
+
+            async with self.db_engine.connect() as conn:
+                result = await conn.run_sync(_sync_inspect)
+                return result
         except Exception as e:
             self.logger.error("get_all_tables_info_failed", error=str(e))
             return "无法获取数据库表列表"
 
     async def search_schema(self, keywords: str) -> str:
         try:
-            safe_kw = keywords.replace("'", "").replace("%", "")
-            query = text("""
-            SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_COMMENT
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-            AND (
-                TABLE_NAME LIKE :kw
-                OR COLUMN_NAME LIKE :kw
-                OR COLUMN_COMMENT LIKE :kw
-            )
-            LIMIT 50
-            """
-            )
+            safe_kw = keywords.strip().lower()
+            
+            def _sync_inspect(connection):
+                from sqlalchemy import inspect
+                inspector = inspect(connection)
+                tables = inspector.get_table_names()
+                
+                matches = []
+                for table in tables:
+                    table_lower = table.lower()
+                    
+                    try:
+                        table_comment = inspector.get_table_comment(table).get("text", "") or ""
+                    except Exception:
+                        table_comment = ""
+                        
+                    # 检查表名或表注释是否匹配
+                    if safe_kw in table_lower or safe_kw in table_comment.lower():
+                        matches.append({
+                            "TABLE_NAME": table,
+                            "COLUMN_NAME": "*",
+                            "DATA_TYPE": "TABLE",
+                            "COLUMN_COMMENT": table_comment
+                        })
+                        continue # 如果表匹配，不再细查列，避免结果过多
+                        
+                    # 检查列名或列注释是否匹配
+                    columns = inspector.get_columns(table)
+                    for col in columns:
+                        col_name = col.get("name", "").lower()
+                        col_comment = (col.get("comment") or "").lower()
+                        
+                        if safe_kw in col_name or safe_kw in col_comment:
+                            matches.append({
+                                "TABLE_NAME": table,
+                                "COLUMN_NAME": col.get("name"),
+                                "DATA_TYPE": str(col.get("type")),
+                                "COLUMN_COMMENT": col.get("comment") or ""
+                            })
+                            
+                            # 限制单个表返回的匹配列数量，避免结果过大
+                            if len(matches) > 50:
+                                break
+                    
+                    if len(matches) > 50:
+                        break
+                        
+                return matches[:50]
+
             async with self.db_engine.connect() as conn:
-                result = await conn.execute(query, {"kw": f"%{safe_kw}%"})
-                rows = result.fetchall()
-                columns = result.keys()
-                matches = [dict(zip(columns, row)) for row in rows]
+                matches = await conn.run_sync(_sync_inspect)
 
                 return json.dumps(
                     {"keyword": keywords, "matches": matches, "count": len(matches)},
