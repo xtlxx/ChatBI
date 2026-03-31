@@ -296,8 +296,9 @@ class ChatBIAgent:
           "retry_counts": {**state["retry_counts"], "generate_sql": retry_count + 1},
           "timings": {**state.get("timings", {}), "generate_sql": duration_ms},
           "steps": ["generate_sql"],
-          "has_error": False,
+          "has_error": False, # 显式重置为 False
           "last_error": None,
+          "error_phase": None, # 清除错误阶段标记
           "fallback_used": state.get("fallback_used", False) or fallback_used,
         }
       except Exception as e:
@@ -537,6 +538,13 @@ class ChatBIAgent:
         
         # 转换为 dict 用于前端 (Pydantic model_dump)
         chart_dict = chart_config.model_dump(exclude_none=True) if chart_config else None
+
+        # --- 关键修复：防止重复渲染错误信息 ---
+        # 如果当前状态本身就是一次 error recovery 的结果，或者之前有报错但最终生成了兜底的报告
+        # 我们需要在 content 中体现，但不要让其作为普通消息和前端错误框同时出现
+        if state.get("has_error") and fallback_used:
+            # 在内容前追加明确的降级提示
+            content = f"⚠️ **系统提示**：由于{state.get('last_error', '未知原因')}，未能完成完整分析。以下为系统直接提取的原始数据。\n\n---\n\n{content}"
 
         response_message = AIMessage(content=content)
         duration_ms = (datetime.now() - node_start).total_seconds() * 1000
