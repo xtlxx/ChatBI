@@ -270,6 +270,7 @@ async def stream_agent_with_cleanup(
     finally:
         execution_time = time.time() - start_time
         # 关键：先执行数据库保存，不依赖 yield，保证持久化绝对执行
+        # 使用 asyncio.shield 保护持久化过程，防止因客户端断开连接被中止
         try:
             content_to_save = full_answer if full_answer else (error_msg or "无回答")
             msg_metadata = {
@@ -279,7 +280,10 @@ async def stream_agent_with_cleanup(
                 "error": error_msg,
                 "execution_time": round(execution_time, 2)
             }
-            await save_chat_message(system_db, session_id, "ai", content_to_save, user_id, msg_metadata)
+            # 使用 shield 保护，防止当前 Task 被取消影响保存
+            await asyncio.shield(save_chat_message(
+                system_db, session_id, "ai", content_to_save, user_id, msg_metadata
+            ))
         except Exception as e:
             logger.error(f"保存消息失败: {e}")
             
