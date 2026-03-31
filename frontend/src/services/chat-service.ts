@@ -83,20 +83,19 @@ export const chatService = {
             return; // 一切正常
           }
           if (response.status === 401) {
-            useAuthStore.getState().logout();
-            window.dispatchEvent(new CustomEvent('unauthorized'));
-            throw new Error(i18n.t('errors.unauthorized'));
+            // 直接抛出错误，交给外层的统一拦截器或顶层边界处理
+            throw new Error('UNAUTHORIZED');
           }
           if (response.status >= 400 && response.status < 500 && response.status !== 429) {
             throw new Error(`请求错误: ${response.status} ${response.statusText}`);
           }
           throw new Error(`服务器错误: ${response.status} ${response.statusText}`);
         },
-        onmessage(msg: any) {
+        onmessage(msg: { event: string; data: string }) {
           try {
             // 处理不同的事件类型
             if (msg.event === 'ping') {
-              console.log('[ChatService] 收到 ping:', msg.data);
+              // console.log('[ChatService] 收到 ping:', msg.data);
               return;
             }
             
@@ -111,7 +110,11 @@ export const chatService = {
 
             hasReceivedData = true;
             const parsedData = JSON.parse(msg.data) as StreamEvent;
-            onChunk(parsedData);
+            
+            // 使用 requestAnimationFrame 简单的节流，防止高频触发 React 渲染
+            requestAnimationFrame(() => {
+                onChunk(parsedData);
+            });
           } catch (e) {
             console.error('解析 SSE JSON 失败', e, msg.data);
           }
@@ -119,7 +122,7 @@ export const chatService = {
         onclose() {
           onComplete();
         },
-        onerror(err: Error | any) {
+        onerror(err: unknown) {
           if (signal?.aborted) {
             return; // 用户取消，不处理错误信号
           }
@@ -129,7 +132,7 @@ export const chatService = {
                  type: 'error',
                  content: '\n\n*(网络连接已中断，以上为部分生成内容)*',
                  done: true
-             } as any);
+             });
              return; // 不抛出错误，停止重试尝试
           }
           throw err; // 触发 onError处理
