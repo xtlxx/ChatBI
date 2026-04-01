@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { MessageSquare, Settings, Plus, Loader2, ArrowLeft, ArrowRight, User } from "lucide-react";
+import { MessageSquare, Settings, Plus, Loader2, ArrowLeft, ArrowRight, User, Trash2 } from "lucide-react";
 import { chatService } from "@/services/chat-service";
 import { authService } from "@/services/auth-service";
 import type { ChatSession, CustomerProfile } from "@/types/api";
@@ -39,10 +39,11 @@ export function Sidebar({ view, onViewChange }: SidebarProps) {
   const fetchSessions = useCallback(async () => {
     try {
       setIsLoading(true);
-      const data = await chatService.getSessions(50, 0); // Keep fetching 50 to have options, but display filtered
+      // 获取 50 条会话数据，后续可根据需要过滤
+      const data = await chatService.getSessions(50, 0);
       setSessions(data);
     } catch (error) {
-      console.error("Failed to fetch sessions", error);
+      console.error("获取会话失败", error);
       toast.error(t('sidebar.loadHistoryError'));
     } finally {
       setIsLoading(false);
@@ -62,6 +63,28 @@ export function Sidebar({ view, onViewChange }: SidebarProps) {
   const handleSessionClick = (id: string) => {
     navigate(`/chat/${id}`);
     if (view === 'settings') onViewChange('nav');
+  };
+
+  const handleDeleteSession = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    
+    if (window.confirm(t('common.confirmDelete') || '确定要删除这个对话吗？')) {
+      try {
+        await chatService.deleteSession(id);
+        toast.success(t('common.deleteSuccess') || '删除成功');
+        
+        // 更新本地列表
+        setSessions(prev => prev.filter(s => s.id !== id));
+        
+        // 如果删除的是当前正在看的会话，跳回新建对话页
+        if (currentSessionId === id) {
+          navigate('/chat/new');
+        }
+      } catch (error) {
+        console.error('Delete session failed:', error);
+        toast.error(t('common.error') || '删除失败');
+      }
+    }
   };
 
   if (view === 'settings') {
@@ -119,19 +142,27 @@ export function Sidebar({ view, onViewChange }: SidebarProps) {
           ) : (
             <>
               {displayedSessions.map((session) => (
-                <button
-                  key={session.id}
-                  onClick={() => handleSessionClick(session.id)}
-                  className={`
-                            group flex items-center gap-3 w-full px-3 py-2 text-sm text-left rounded-lg transition-colors
-                            ${currentSessionId === session.id
-                      ? "bg-accent text-accent-foreground font-medium"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"}
-                        `}
-                >
-                  <MessageSquare size={16} className="shrink-0 opacity-70" />
-                  <span className="truncate flex-1">{session.title || t('chat.newChat')}</span>
-                </button>
+                <div key={session.id} className="relative group">
+                  <button
+                    onClick={() => handleSessionClick(session.id)}
+                    className={`
+                              flex items-center gap-3 w-full px-3 py-2 text-sm text-left rounded-lg transition-colors pr-10
+                              ${currentSessionId === session.id
+                        ? "bg-accent text-accent-foreground font-medium"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"}
+                          `}
+                  >
+                    <MessageSquare size={16} className="shrink-0 opacity-70" />
+                    <span className="truncate flex-1">{session.title || t('chat.newChat')}</span>
+                  </button>
+                  <button
+                    onClick={(e) => handleDeleteSession(e, session.id)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md opacity-0 group-hover:opacity-100 transition-all duration-200"
+                    title={t('common.delete') || '删除'}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               ))}
 
               {/* View All / Show Less Button */}
