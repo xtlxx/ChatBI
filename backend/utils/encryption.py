@@ -25,28 +25,22 @@ class EncryptionManager:
         # 从配置获取加密密钥
         encryption_key = settings.ENCRYPTION_KEY
 
-        # 强校验：生产环境禁止使用默认 Key
-        if (
-            not encryption_key
-            or encryption_key == "default-encryption-key-change-this-in-production"
-        ):
-            # 检查当前环境是否为生产环境
-            env_mode = getattr(settings, "ENV", "development")
-            if env_mode == "production":
-                raise ValueError(
-                    "CRITICAL SECURITY ERROR: ENCRYPTION_KEY is not set in production!"
-                )
-            # 开发环境使用默认 Key
-            if not encryption_key:
-                encryption_key = "default-encryption-key-change-this-in-production"
+        # 强校验：强制要求必须配置密钥，不区分环境
+        if not encryption_key or encryption_key == "default-encryption-key-change-this-in-production":
+            raise ValueError(
+                    "严重安全错误：未设置 ENCRYPTION_KEY 或正在使用默认值！"
+                    "请在环境变量 或 .env 文件中设置强 ENCRYPTION_KEY。"
+            )
 
         # 使用 PBKDF2HMAC 从密鑰派生 Fernet 密鑰
-        # Salt 与主密鑰均从配置读取，生产环境必须在 .env 中设置不同的值
         salt = getattr(settings, "ENCRYPTION_SALT", None)
-        if salt:
-            salt_bytes = salt.encode("utf-8")
-        else:
-            salt_bytes = b"chatbi-salt-dev-only"  # 仅开发默认値，生产必须覆盖
+        if not salt or salt == "chatbi-salt-dev-only":
+            raise ValueError(
+                    "严重安全错误：未设置 ENCRYPTION_SALT 或正在使用默认值！"
+                    "请在环境变量 或 .env 文件中设置强 ENCRYPTION_SALT。"
+            )
+        
+        salt_bytes = salt.encode("utf-8")
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
