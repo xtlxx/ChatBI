@@ -201,7 +201,7 @@ export function LlmConfigManager({ configs = [], selectedId, onSelect, onUpdate 
         {onSelect && (
              <div className="p-1 bg-muted/50 rounded-xl border border-border">
                 <select 
-                    className="w-full text-sm bg-transparent border-none focus:ring-0 p-2 outline-none"
+                    className="w-full text-sm bg-transparent border-none focus:ring-0 p-2 outline-none dark:bg-zinc-900 dark:text-gray-200"
                     value={selectedId || ''}
                     onChange={(e) => onSelect(e.target.value ? Number(e.target.value) : null)}
                 >
