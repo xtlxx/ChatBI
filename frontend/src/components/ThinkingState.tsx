@@ -20,8 +20,8 @@ interface ThinkingStateProps {
     timeoutMs?: number;
 }
 
-// Pipeline steps for visual progress
-// Note: Labels will be translated in the component
+// 可视化进度条步骤
+// 注意：标签将在组件内部进行翻译
 const PIPELINE_STEPS = [
     { key: 'thinking', icon: BrainCircuit, keywords: ['思考', 'thinking', 'Thinking'] },
     { key: 'sql', icon: CodeIcon, keywords: ['SQL', 'sql', '分析数据', 'Analysis'] },
@@ -38,7 +38,7 @@ function detectCurrentPipelineStep(step?: string): number {
     return 0;
 }
 
-export function ThinkingState({ status = 'idle', content, currentStep, elapsedTime, timeoutMs = 90000 }: ThinkingStateProps) {
+export function ThinkingState({ status = 'idle', content, currentStep, elapsedTime, timeoutMs = 600000 }: ThinkingStateProps) {
     const { t } = useTranslation();
     const [isOpen, setIsOpen] = useState(false); // Default collapsed for cleaner UI
     const [displayStatus, setDisplayStatus] = useState<ThinkingStatus>(status);
@@ -46,7 +46,7 @@ export function ThinkingState({ status = 'idle', content, currentStep, elapsedTi
     const [internalTimer, setInternalTimer] = useState(0);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    // Smooth streaming state
+    // 平滑流状态管理
     const [displayedContent, setDisplayedContent] = useState('');
     const prevContentRef = useRef('');
 
@@ -58,7 +58,7 @@ export function ThinkingState({ status = 'idle', content, currentStep, elapsedTi
         minDelay: 10
     });
 
-    // Sync content with smooth stream
+    // 将外部传入的 content 与内部平滑流状态同步
     useEffect(() => {
         const newContent = content || '';
         const oldContent = prevContentRef.current;
@@ -76,7 +76,7 @@ export function ThinkingState({ status = 'idle', content, currentStep, elapsedTi
     const pipelineIndex = detectCurrentPipelineStep(currentStep);
     const isActive = displayStatus === 'thinking' || displayStatus === 'starting';
 
-    // Internal timer when no elapsedTime is provided
+    // 内部定时器，当没有提供 elapsedTime 时使用
     useEffect(() => {
         if (isActive && elapsedTime === undefined) {
             timerRef.current = setInterval(() => {
@@ -84,7 +84,7 @@ export function ThinkingState({ status = 'idle', content, currentStep, elapsedTi
             }, 100);
             return () => { if (timerRef.current) clearInterval(timerRef.current); };
         } else if (!isActive) {
-            // setInternalTimer(0); // Keep the last time
+            // 保留最后一次计时，不重置
             if (timerRef.current) clearInterval(timerRef.current);
         }
     }, [isActive, elapsedTime]);
@@ -104,7 +104,7 @@ export function ThinkingState({ status = 'idle', content, currentStep, elapsedTi
         } else {
             setDisplayStatus(status);
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // 忽略依赖项警告：status 变化时重置超时计时器，timeoutMs 仅在初始化时生效
     }, [status, timeoutMs]);
 
     const displayTime = elapsedTime ?? internalTimer;
@@ -119,7 +119,7 @@ export function ThinkingState({ status = 'idle', content, currentStep, elapsedTi
         return { business: text, technical: '', hasTechnical: false };
     };
 
-    // Auto-expand when status becomes thinking
+    // 自动展开当状态 变为 thinking 时触发
     useEffect(() => {
         if (status === 'thinking' && !isOpen) {
             setIsOpen(true);
@@ -130,7 +130,7 @@ export function ThinkingState({ status = 'idle', content, currentStep, elapsedTi
 
     return (
         <div className="space-y-3">
-            {/* Status Banner + Timer */}
+            {/* 状态条 + 定时器 */}
             <div className="border rounded-xl overflow-hidden bg-card/50 shadow-sm transition-all duration-300 hover:shadow-md">
                 <Collapsible.Root open={isOpen} onOpenChange={setIsOpen}>
                     <Collapsible.Trigger className={`
