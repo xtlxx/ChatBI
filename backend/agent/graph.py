@@ -507,10 +507,10 @@ class ChatBIAgent:
                 "few_shot_examples": few_shot_examples_text,
               }
             ),
-            timeout=180.0
+            timeout=600.0
           )
         except TimeoutError:
-          self.logger.warning("response_generation_timeout", duration_ms=180000)
+          self.logger.warning("response_generation_timeout", duration_ms=600000)
           simple_report = self._generate_simple_report(state)
           # 构造一个临时的 GenerateResponseOutput 对象
           result_obj = GenerateResponseOutput(
@@ -755,6 +755,7 @@ class ChatBIAgent:
         if current_phase != last_phase:
           last_phase = current_phase
           phase_messages = {
+            "init": "正在初始化分析环境...",
             "retrieve_schema": "正在检索数据库结构...",
             "explicit_thinking": "开始深度思考...",
             "generate_sql": "正在生成 SQL 查询...",
@@ -764,7 +765,9 @@ class ChatBIAgent:
             "completed": "处理完成！",
             "failed": "处理失败，请稍后重试"
           }
-          status_msg = phase_messages.get(current_phase, f"进入阶段: {current_phase}")
+          # 如果是没有翻译的内部状态，过滤掉下划线，首字母大写
+          formatted_phase = current_phase.replace("_", " ").title() if current_phase else "处理中"
+          status_msg = phase_messages.get(current_phase, f"正在处理: {formatted_phase}...")
           yield {
             "type": "status",
             "content": status_msg,
