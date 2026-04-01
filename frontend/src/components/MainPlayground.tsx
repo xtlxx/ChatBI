@@ -83,37 +83,82 @@ export function MainPlayground() {
                 
                 if (audioChunksRef.current.length === 0) return;
 
-                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' }); // We record in webm and let backend handle or we need a frontend converter. For now, sending as is, but we might need an AudioContext conversion if Xunfei strictly requires 16k PCM.
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' }); 
                 
-                // --- Conversion to 16kHz PCM ---
+                // --- Conversion to 16kHz PCM using Web Worker to avoid blocking UI ---
                 try {
                     toast.loading(t('chat.recognizing') || 'Recognizing speech...', { id: 'speech-recognition' });
                     
                     const arrayBuffer = await audioBlob.arrayBuffer();
-                    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
                     
-                    // Convert float32 to Int16
-                    const channelData = audioBuffer.getChannelData(0);
-                    const pcmData = new Int16Array(channelData.length);
-                    for (let i = 0; i < channelData.length; i++) {
-                        let s = Math.max(-1, Math.min(1, channelData[i]));
-                        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    // 兼容性与静默失败处理：检查 AudioContext
+                    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+                    if (!AudioContextClass) {
+                        throw new Error('Your browser does not support AudioContext');
                     }
                     
-                    const pcmBlob = new Blob([pcmData], { type: 'audio/pcm' });
+                    const audioContext = new AudioContextClass({ sampleRate: 16000 });
                     
-                    // Send to backend
-                    const result = await speechService.recognizeSpeech(pcmBlob);
-                    
-                    if (result.success && result.text) {
-                        setInput(prev => prev + (prev ? ' ' : '') + result.text);
-                        toast.success(t('chat.recognizeSuccess') || 'Recognized', { id: 'speech-recognition' });
-                    } else {
-                        toast.error(t('chat.recognizeEmpty') || 'No speech recognized', { id: 'speech-recognition' });
+                    let audioBufferDecoded;
+                    try {
+                        audioBufferDecoded = await audioContext.decodeAudioData(arrayBuffer);
+                    } catch (decodeErr) {
+                        console.error('Audio decode error:', decodeErr);
+                        throw new Error('Failed to decode audio data');
                     }
+
+                    const channelData = audioBufferDecoded.getChannelData(0);
+                    
+                    // Create worker and send data
+                    const worker = new Worker(new URL('../workers/audio-worker.ts', import.meta.url), { type: 'module' });
+                    
+                    // 设置超时机制 (例如 15 秒)
+                    const timeoutId = setTimeout(() => {
+                        worker.terminate();
+                        toast.error(t('chat.recognizeTimeout') || 'Speech recognition timed out', { id: 'speech-recognition' });
+                    }, 15000);
+
+                    worker.onmessage = async (e) => {
+                        clearTimeout(timeoutId);
+                        worker.terminate(); // Clean up worker
+                        
+                        if (e.data.success) {
+                            const pcmBlob = e.data.blob;
+                            // Send to backend
+                            try {
+                                const result = await speechService.recognizeSpeech(pcmBlob);
+                                
+                                if (result.success && result.text) {
+                                    setInput(prev => prev + (prev ? ' ' : '') + result.text);
+                                    toast.success(t('chat.recognizeSuccess') || 'Recognized', { id: 'speech-recognition' });
+                                } else {
+                                    toast.error(t('chat.recognizeEmpty') || 'No speech recognized', { id: 'speech-recognition' });
+                                }
+                            } catch (apiErr) {
+                                console.error('Speech API error:', apiErr);
+                                toast.error(t('chat.micError') || 'Recognition API failed', { id: 'speech-recognition' });
+                            }
+                        } else {
+                            console.error('Worker error:', e.data.error);
+                            toast.error(t('chat.micError') || 'Microphone error', { id: 'speech-recognition' });
+                        }
+                    };
+                    
+                    worker.onerror = (err) => {
+                        clearTimeout(timeoutId);
+                        console.error('Worker thread error:', err);
+                        toast.error(t('chat.micError') || 'Microphone error', { id: 'speech-recognition' });
+                        worker.terminate();
+                    };
+                    
+                    // Pass ArrayBuffer directly to avoid copying cost
+                    worker.postMessage({ 
+                        audioBuffer: channelData.buffer,
+                        sampleRate: 16000
+                    }, [channelData.buffer]);
+                    
                 } catch (error) {
-                    console.error('Speech recognition error', error);
+                    console.error('Speech recognition setup error', error);
                     toast.error(t('chat.micError') || 'Microphone error', { id: 'speech-recognition' });
                 }
             };
