@@ -296,8 +296,8 @@ class ChatBIAgent:
           "retry_counts": {**state["retry_counts"], "generate_sql": retry_count + 1},
           "timings": {**state.get("timings", {}), "generate_sql": duration_ms},
           "steps": ["generate_sql"],
-          "has_error": False, # 显式重置为 False
-          "last_error": None,
+          "has_error": False, # 🌟 关键修复：显式重置为 False
+          "last_error": None, # 清除上一轮的错误信息
           "error_phase": None, # 清除错误阶段标记
           "fallback_used": state.get("fallback_used", False) or fallback_used,
         }
@@ -310,8 +310,7 @@ class ChatBIAgent:
 
         # 🌟 关键修复：将详细错误回传给 State 的 messages，触发 Self-Correction
         error_feedback_msg = HumanMessage(
-            content=f"Structured Output Validation Failed (Attempt {retry_count + 1}): {str(e)}. "
-                    f"Please analyze the schema definition and fix your output format."
+            content=f"结构化输出验证失败（第 {retry_count + 1} 次尝试）：{str(e)}。请分析 schema 定义并修正输出格式。"
         )
 
         return {
@@ -361,7 +360,7 @@ class ChatBIAgent:
           
           # 🌟 关键修复：将 SQL 校验错误回传给 State 的 messages
           error_feedback_msg = HumanMessage(
-              content=f"SQL Safety Validation Failed: {error}. Please fix the SQL query to comply with safety rules."
+              content=f"SQL 安全校验失败：{error}。请修正 SQL 查询以符合安全规则。"
           )
           
           return {
@@ -618,13 +617,13 @@ class ChatBIAgent:
 
     def route_after_execution(state: AgentState) -> str:
       if state.get("has_error"):
-        if state["retry_counts"].get("execute_sql", 0) >= 2:
+        if state["retry_counts"].get("execute_sql", 0) >= 3:
           return END
-        return "generate_sql"  # 关键修复：执行失败应回退到生成阶段，而不是重试执行
+        return "generate_sql"  # 执行失败回退到生成阶段
       if state.get("execution_result") and not state.get("execution_result").get("error"):
         return "generate_response"
       else:
-        if state["retry_counts"].get("execute_sql", 0) >= 2:
+        if state["retry_counts"].get("execute_sql", 0) >= 3:
           return END
         return "generate_sql"
 
