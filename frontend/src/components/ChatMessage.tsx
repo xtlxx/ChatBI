@@ -8,6 +8,7 @@ import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { ThinkingState } from './ThinkingState';
 import { ChartRenderer } from '@/components/ChartRenderer';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { SqlBlock } from '@/components/ui/SqlBlock';
 import { cleanMarkdownContent } from '@/lib/utils';
 import type { Message } from '@/types/chat';
@@ -309,10 +310,19 @@ content={(msg.thinking || '') + (msg.sqlThought ? '\n\n**技术思考 (SQL Strat
 
                             {/* === CHART === */}
                             {msg.chartOption && (
-                                <div className="mt-5">
-                                    <div className="h-px bg-gradient-to-r from-transparent via-border to-transparent mb-4" />
-                                    <div className="h-80 md:h-96 border border-border rounded-xl bg-card p-4 shadow-sm overflow-hidden">
-                                        <ChartRenderer option={msg.chartOption} />
+                                <div className="mt-4 w-full overflow-hidden bg-white dark:bg-[#1a1a1a] rounded-xl border border-gray-100 dark:border-zinc-800/50 shadow-sm animate-in fade-in slide-in-from-bottom-2">
+                                    <div className="px-4 py-2.5 border-b border-gray-100 dark:border-zinc-800/50 bg-gray-50/50 dark:bg-zinc-900/30 flex items-center justify-between">
+                                        <div className="flex items-center gap-2 text-xs font-medium text-gray-600 dark:text-gray-300">
+                                            <svg className="w-4 h-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                            </svg>
+                                            {t('chat.status.visualization')}
+                                        </div>
+                                    </div>
+                                    <div className="p-4">
+                                        <ErrorBoundary fallback={<div className="p-4 text-xs text-muted-foreground text-center">图表渲染失败，请检查数据格式。</div>}>
+                                            <ChartRenderer option={msg.chartOption} />
+                                        </ErrorBoundary>
                                     </div>
                                 </div>
                             )}
