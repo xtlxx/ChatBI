@@ -4,9 +4,12 @@ import { RouterProvider } from 'react-router-dom'
 import './index.css'
 import './lib/i18n' // Import i18n configuration
 import { router } from './router'
+import { ErrorBoundary } from './components/ui/ErrorBoundary'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <ErrorBoundary>
+      <RouterProvider router={router} />
+    </ErrorBoundary>
   </StrictMode>,
 )
