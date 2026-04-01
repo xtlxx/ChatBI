@@ -4,6 +4,7 @@
 基于 LangChain 0.1+ 和 LangGraph 构建的 SQL 分析 Agent
 适配最新的 ChatBIAgent 状态图架构
 """
+import asyncio
 import json
 import os
 import sys
