@@ -27,7 +27,7 @@ function App() {
       {/* 左侧边栏 */}
       <div 
         className={`
-          transition-all duration-300 ease-in-out border-r bg-white z-20
+          transition-all duration-300 ease-in-out border-r border-border bg-background z-20
           ${isLeftSidebarOpen ? "w-80 translate-x-0" : "w-0 -translate-x-full md:w-0 md:translate-x-0 overflow-hidden opacity-0 md:opacity-100"}
           absolute md:relative h-full
         `}
