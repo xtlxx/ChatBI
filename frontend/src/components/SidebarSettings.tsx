@@ -29,7 +29,7 @@ export function SidebarSettings() {
                         {t('settings.appearance')}
                     </label>
                 </div>
-                <div className="grid grid-cols-3 gap-2 p-1 bg-muted/50 rounded-xl border border-border">
+                <div className="grid grid-cols-3 gap-2 p-1 bg-muted/50 dark:bg-zinc-900/50 rounded-xl border border-border dark:border-zinc-800">
                     {(['light', 'dark', 'system'] as const).map((mode) => (
                         <button
                             key={mode}
@@ -37,8 +37,8 @@ export function SidebarSettings() {
                             className={`
                                 flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium rounded-lg transition-all
                                 ${theme === mode 
-                                    ? "bg-background text-foreground shadow-sm ring-1 ring-border" 
-                                    : "text-muted-foreground hover:text-foreground hover:bg-background/50"}
+                                    ? "bg-background dark:bg-zinc-800 text-foreground dark:text-gray-100 shadow-sm ring-1 ring-border dark:ring-zinc-700" 
+                                    : "text-muted-foreground dark:text-zinc-400 hover:text-foreground dark:hover:text-gray-200 hover:bg-background/50 dark:hover:bg-zinc-800/50"}
                             `}
                             aria-label={t(`settings.theme.${mode}`)}
                             aria-pressed={theme === mode}
