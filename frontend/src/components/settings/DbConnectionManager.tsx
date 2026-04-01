@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { connectionService } from '@/services/connection-service';
-import type { DbConnection, DbConnectionCreate, DbType, ConnectionTestResponse } from '@/types/api';
+import type { DbConnection, DbConnectionCreate, ConnectionTestResponse, DbType } from '@/types/api';
 import { Modal } from '@/components/ui/Modal';
-import { Trash2, Edit2, Database, Loader2, Play, AlertCircle, CheckCircle2, RotateCcw, X, Eye, EyeOff } from 'lucide-react';
+import { Trash2, Edit2, Database, Loader2, Play, AlertCircle, CheckCircle2, RotateCcw, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 
@@ -169,7 +169,8 @@ export function DbConnectionManager({ connections = [], selectedId, onSelect, on
             success: false,
             message: t('settings.connections.testFailed'),
             error_detail: String(error),
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            duration_ms: 0
         });
         const newRetryCount = retryCount + 1;
         setRetryCount(newRetryCount);
@@ -222,7 +223,7 @@ export function DbConnectionManager({ connections = [], selectedId, onSelect, on
              <div className="flex items-center gap-2">
                  <div className="flex-1 p-1 bg-muted/50 rounded-xl border border-border">
                     <select 
-                        className="w-full text-sm bg-transparent border-none focus:ring-0 p-2 outline-none"
+                        className="w-full text-sm bg-transparent border-none focus:ring-0 p-2 outline-none dark:bg-zinc-900 dark:text-gray-200"
                         value={selectedId || ''}
                         onChange={(e) => onSelect(e.target.value ? Number(e.target.value) : null)}
                     >
