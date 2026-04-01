@@ -96,7 +96,15 @@ def validate_and_format_sql(sql: str, dialect: str = "postgres") -> str:
         if isinstance(node, forbidden_types):
             raise ValueError(f"安全拦截: 语句中包含禁止的操作 {node.key}")
 
-    # 3. 强制 LIMIT 策略 (防止全表扫描拖垮内存)
+    # 3. 检查是否存在敏感字段查询 (AST 级别的字段黑名单)
+    sensitive_keywords = {"password", "secret", "key", "token", "hash", "pwd", "salt"}
+    # 遍历所有的列引用，无论是普通 SELECT 还是别名、WHERE 条件里的列，都会被解析为 exp.Column
+    for col in expression.find_all(exp.Column):
+        col_name = col.name.lower()
+        if any(kw in col_name for kw in sensitive_keywords):
+            raise ValueError(f"安全拦截: 查询中包含了被禁止访问的敏感字段 '{col.name}'。")
+
+    # 4. 强制 LIMIT 策略 (防止全表扫描拖垮内存)
     # 针对最外层的 SELECT 语句注入 LIMIT
     if isinstance(expression, exp.Select):
         limit_node = expression.args.get("limit")
@@ -107,7 +115,7 @@ def validate_and_format_sql(sql: str, dialect: str = "postgres") -> str:
             # 可选：如果用户写的 LIMIT 超过阈值，也可以在此强制覆盖
             pass
 
-    # 4. 软删除策略注入 (保持业务逻辑一致性)
+    # 5. 软删除策略注入 (保持业务逻辑一致性)
     try:
         cte_names = {cte.alias.lower() for cte in expression.find_all(exp.CTE)}
         
@@ -362,9 +370,38 @@ class DatabaseTools:
 
     async def search_schema(self, keywords: str) -> str:
         try:
-            safe_kw = keywords.strip().lower()
+            safe_kw = keywords.strip()
+            if not safe_kw:
+                 return json.dumps({"keyword": keywords, "matches": [], "count": 0}, ensure_ascii=False)
             
+            # 高性能原生 SQL 搜索 (优先针对 MySQL/PostgreSQL 优化)
+            if self.db_type == DbType.mysql:
+                query = text("""
+                    SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_COMMENT 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_SCHEMA = DATABASE() 
+                    AND (TABLE_NAME LIKE :kw OR COLUMN_NAME LIKE :kw OR COLUMN_COMMENT LIKE :kw) 
+                    LIMIT 100
+                """)
+                async with self.db_engine.connect() as conn:
+                    result = await conn.execute(query, {"kw": f"%{safe_kw}%"})
+                    matches = [
+                        {
+                            "TABLE_NAME": r[0],
+                            "COLUMN_NAME": r[1],
+                            "DATA_TYPE": str(r[2]),
+                            "COLUMN_COMMENT": r[3] or ""
+                        } for r in result.fetchall()
+                    ]
+                    return json.dumps(
+                        {"keyword": keywords, "matches": matches, "count": len(matches)},
+                        ensure_ascii=False,
+                        default=safe_serializer,
+                    )
+            
+            # 其他数据库类型回退到 SQLAlchemy Inspector
             def _sync_inspect(connection):
+                safe_kw_lower = safe_kw.lower()
                 from sqlalchemy import inspect
                 inspector = inspect(connection)
                 tables = inspector.get_table_names()
@@ -379,7 +416,7 @@ class DatabaseTools:
                         table_comment = ""
                         
                     # 检查表名或表注释是否匹配
-                    if safe_kw in table_lower or safe_kw in table_comment.lower():
+                    if safe_kw_lower in table_lower or safe_kw_lower in table_comment.lower():
                         matches.append({
                             "TABLE_NAME": table,
                             "COLUMN_NAME": "*",
