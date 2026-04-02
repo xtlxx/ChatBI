@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 
 interface ChatSettingsState {
   selectedConnectionId: number | null;
@@ -18,6 +18,7 @@ export const useChatSettingsStore = create<ChatSettingsState>()(
     }),
     {
       name: 'chat-settings-storage',
+      storage: createJSONStorage(() => localStorage),
     }
   )
 );

@@ -188,13 +188,16 @@ async def get_session_with_messages(session_id: str, user_id: CurrentUserId, db:
 async def update_session(
     session_id: str, data: SessionUpdate, user_id: CurrentUserId, db: DbSession
 ):
-    """更新会话（如修改标题）"""
-    stmt = select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user_id)
+    # 验证权限 (强校验 user_id)
+    stmt = select(ChatSession).where(
+        ChatSession.id == session_id, 
+        ChatSession.user_id == user_id
+    )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
 
     if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
 
     if data.title:
         session.title = data.title
@@ -206,13 +209,16 @@ async def update_session(
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_session(session_id: str, user_id: CurrentUserId, db: DbSession):
-    """删除会话及其所有消息"""
-    stmt = select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user_id)
+    # 验证权限 (强校验 user_id)
+    stmt = select(ChatSession).where(
+        ChatSession.id == session_id, 
+        ChatSession.user_id == user_id
+    )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
 
     if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
 
     await db.delete(session)
     await db.commit()
@@ -227,13 +233,16 @@ async def delete_session(session_id: str, user_id: CurrentUserId, db: DbSession)
 )
 async def add_message(session_id: str, data: MessageCreate, user_id: CurrentUserId, db: DbSession):
     """向会话添加消息"""
-    # 验证会话存在且属于当前用户
-    stmt = select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user_id)
+    # 验证会话存在且属于当前用户 (强校验 user_id)
+    stmt = select(ChatSession).where(
+        ChatSession.id == session_id, 
+        ChatSession.user_id == user_id
+    )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
 
     if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
 
     # 创建消息
     new_message = ChatMessage(
@@ -259,13 +268,16 @@ async def get_messages(
     session_id: str, user_id: CurrentUserId, db: DbSession, limit: int = 100, offset: int = 0
 ):
     """获取会话的消息历史"""
-    # 验证权限
-    stmt = select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == user_id)
+    # 验证会话存在且属于当前用户 (强校验 user_id)
+    stmt = select(ChatSession).where(
+        ChatSession.id == session_id, 
+        ChatSession.user_id == user_id
+    )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
 
     if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
 
     # 获取消息
     msg_stmt = (
@@ -286,11 +298,14 @@ async def update_message_feedback(
     """
     更新消息反馈 (赞/踩)
     """
-    # 1. 获取消息并验证归属权
+    # 1. 获取消息并验证归属权 (强校验 user_id)
     stmt = (
         select(ChatMessage)
         .join(ChatSession)
-        .where(ChatMessage.id == message_id, ChatSession.user_id == user_id)
+        .where(
+            ChatMessage.id == message_id, 
+            ChatSession.user_id == user_id
+        )
     )
     result = await db.execute(stmt)
     message = result.scalar_one_or_none()

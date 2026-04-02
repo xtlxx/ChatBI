@@ -127,3 +127,14 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3.13",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-watch",
+    "pytest-asyncio",
+    "ruff",
+    "black",
+    "mypy"
+]

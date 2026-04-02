@@ -246,8 +246,8 @@
     color: #ec4899;
   }
 
-  .dark .sql-keyword #a78b {
-    color:fa;
+  .dark .sql-keyword {
+    color: #a78bfa;
   }
 
   .dark .sql-string {

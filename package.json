@@ -1,0 +1,29 @@
+{
+  "name": "ky",
+  "version": "1.0.0",
+  "description": "> 🤖 生产级的企业 AI SQL 分析平台。通过自然语言对话，自动理解意图、生成 SQL、执行查询、并输出可视化数据分析报告。",
+  "private": true,
+  "scripts": {
+    "prepare": "husky",
+    "test:backend": "cd backend && pytest",
+    "test:frontend": "cd frontend && npm run test -- --run",
+    "test:all": "concurrently \"npm run test:backend\" \"npm run test:frontend\"",
+    "test:watch": "concurrently \"cd backend && pytest-watch\" \"cd frontend && npm run test\"",
+    "pre-commit": "lint-staged"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0"
+  },
+  "lint-staged": {
+    "frontend/**/*.{js,ts,jsx,tsx}": [
+      "cd frontend && npm run lint",
+      "cd frontend && npm run test -- --run --passWithNoTests"
+    ],
+    "backend/**/*.py": [
+      "cd backend && ruff check",
+      "cd backend && pytest"
+    ]
+  }
+}
