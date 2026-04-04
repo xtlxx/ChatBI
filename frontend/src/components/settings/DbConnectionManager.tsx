@@ -293,6 +293,22 @@ export function DbConnectionManager({ connections = [], selectedId, onSelect, on
                                     <div className="flex items-center gap-1 flex-shrink-0 bg-white pl-2">
                                         <button 
                                             type="button"
+                                            onClick={async (e) => {
+                                                e.stopPropagation();
+                                                try {
+                                                    const res = await connectionService.refreshSchema(conn.id);
+                                                    if (res.success) toast.success(res.message);
+                                                } catch {
+                                                    toast.error('刷新缓存失败');
+                                                }
+                                            }} 
+                                            className="p-2 text-gray-500 hover:bg-green-50 hover:text-green-600 rounded-full transition-colors cursor-pointer z-10"
+                                            title="刷新 Schema 缓存"
+                                        >
+                                            <RotateCcw size={16} />
+                                        </button>
+                                        <button 
+                                            type="button"
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 handleEdit(conn.id);

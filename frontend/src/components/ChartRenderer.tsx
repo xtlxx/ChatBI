@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { Maximize2, Minimize2, Download, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useThemeStore } from '@/store/theme-store'; // 引入主题 Store
 import type { ChartOption } from '@/types/api';
 
 interface ChartRendererProps {
@@ -15,67 +16,58 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // 验证图表配置
+  // 获取当前主题
+  const { theme } = useThemeStore();
+  
+  // 计算实际传给 ECharts 的主题（处理 system 逻辑）
+  const actualTheme = useMemo(() => {
+    if (theme === 'system') {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    return theme;
+  }, [theme]);
+
+  // 严格验证图表配置，防止 ECharts 内部抛出异常导致白屏
   const validatedOption = useMemo(() => {
     if (!option || typeof option !== 'object') return null;
-    const opt = option as Record<string, unknown>;
+    const opt = option as ChartOption;
 
-    // 图表配置必须包含 series 或 dataset 中的一个
-    if (!opt.series && !opt.dataset) {
+    // ECharts 核心要求：必须有 series 且必须是数组（除非使用了 dataset）
+    const hasValidSeries = Array.isArray(opt.series) && opt.series.length > 0;
+    const hasValidDataset = opt.dataset !== undefined;
+
+    if (!hasValidSeries && !hasValidDataset) {
       return null;
     }
 
     return opt;
   }, [option]);
 
+  // 简化 mergedOption，让 ECharts 的 theme 接管颜色，只保留基础布局配置
   const mergedOption = useMemo(() => {
     if (!validatedOption) return null;
-    const themeOverrides = {
-      backgroundColor: 'transparent',
-      textStyle: {
-        color: 'var(--foreground, #1f2937)',
-        fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-        fontSize: 14,
-      },
-      // Modern color palette
-      color: [
-        '#3b82f6', // blue-500
-        '#10b981', // emerald-500
-        '#f59e0b', // amber-500
-        '#ef4444', // red-500
-        '#8b5cf6', // violet-500
-        '#ec4899', // pink-500
-        '#6366f1', // indigo-500
-        '#14b8a6', // teal-500
-      ],
+    return {
+      backgroundColor: 'transparent', // 保持透明以适应外层容器的圆角和背景
       animation: true,
       animationDuration: 1000,
       animationEasing: 'cubicOut',
-      grid: {
-        top: 40,
-        right: 20,
-        bottom: 40,
-        left: 20,
-        containLabel: true
-      }
+      grid: { top: 40, right: 20, bottom: 40, left: 20, containLabel: true },
+      ...validatedOption
     };
-    return { ...themeOverrides, ...validatedOption };
   }, [validatedOption]);
 
-  // 根据已验证的图表配置计算错误状态
   const hasError = !validatedOption;
   const errorMsg = hasError ? t('chart.error') : '';
 
-  // 切换全屏
+  // 切换全屏 (增加跨浏览器兼容)
   const toggleFullscreen = useCallback(() => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen().catch(err => {
-        console.error(`Error attempting to enable fullscreen: ${err.message}`);
-      });
+    const elem = containerRef.current as any;
+    if (!document.fullscreenElement && !((document as any).webkitFullscreenElement)) {
+      if (elem?.requestFullscreen) elem.requestFullscreen();
+      else if (elem?.webkitRequestFullscreen) elem.webkitRequestFullscreen();
     } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
-      }
+      if (document.exitFullscreen) document.exitFullscreen();
+      else if ((document as any).webkitExitFullscreen) (document as any).webkitExitFullscreen();
     }
   }, []);
 
@@ -188,6 +180,7 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
       <ReactECharts
         ref={chartRef}
         option={mergedOption}
+        theme={actualTheme} // 👈 关键：直接传入 'dark' 或 'light'
         style={{ height: isFullscreen ? 'calc(100vh - 4rem)' : height, width: '100%' }}
         opts={{ renderer: 'canvas' }}
         notMerge={true}

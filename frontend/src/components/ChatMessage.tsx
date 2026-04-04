@@ -6,6 +6,12 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+
+// 引入成熟的语法高亮库
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus, vs } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { useThemeStore } from '@/store/theme-store';
+
 import { ThinkingState } from './ThinkingState';
 import { ChartRenderer } from '@/components/ChartRenderer';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
@@ -14,74 +20,6 @@ import { cleanMarkdownContent } from '@/lib/utils';
 import type { Message } from '@/types/chat';
 import { useSmoothStream } from '@/hooks/useSmoothStream';
 
-// Markdown 代码块中的 SQL 语法高亮器
-function highlightSQLInMarkdown(code: string): string {
-  const keywords = [
-    'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
-    'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS', 'ON',
-    'GROUP', 'BY', 'ORDER', 'ASC', 'DESC', 'HAVING',
-    'LIMIT', 'OFFSET', 'AS', 'DISTINCT', 'ALL', 'UNION',
-    'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE',
-    'CREATE', 'ALTER', 'DROP', 'TABLE', 'INDEX',
-    'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
-    'BETWEEN', 'LIKE', 'EXISTS', 'WITH', 'RECURSIVE',
-    'TRUE', 'FALSE', 'DEFAULT', 'LIMIT', 'OFFSET',
-  ];
-
-  const functions = [
-    'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'COALESCE', 'IFNULL', 'NULLIF',
-    'DATE_FORMAT', 'DATE', 'NOW', 'CURDATE', 'YEAR', 'MONTH', 'DAY',
-    'CONCAT', 'SUBSTRING', 'TRIM', 'UPPER', 'LOWER', 'LENGTH',
-    'CAST', 'CONVERT', 'ROUND', 'FLOOR', 'CEIL', 'ABS',
-    'GROUP_CONCAT', 'IF', 'DATEDIFF', 'DATE_ADD', 'DATE_SUB',
-    'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'LAG', 'LEAD', 'OVER', 'PARTITION',
-  ];
-
-  let result = code;
-
-  // 转义 HTML，防止 XSS
-  result = result.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  // 高亮单引号字符串
-  result = result.replace(
-    /('(?:[^'\\]|\\.)*')/g,
-    '<span class="sql-string">$1</span>'
-  );
-
-  // 高亮数字，包括小数
-  result = result.replace(
-    /\b(\d+(?:\.\d+)?)\b/g,
-    '<span class="sql-number">$1</span>'
-  );
-
-  // 高亮注释
-  result = result.replace(
-    /(--.*$)/gm,
-    '<span class="sql-comment">$1</span>'
-  );
-
-  // 高亮关键词（不区分大小写，完整匹配）
-  for (const kw of keywords) {
-    const regex = new RegExp(`\\b(${kw})\\b`, 'gi');
-    result = result.replace(regex, '<span class="sql-keyword">$1</span>');
-  }
-
-  // 高亮函数（不区分大小写，完整匹配）
-  for (const fn of functions) {
-    const regex = new RegExp(`\\b(${fn})\\s*(?=\\()`, 'gi');
-    result = result.replace(regex, '<span class="sql-function">$1</span>');
-  }
-
-  // 高亮反引号字符串（标识符） ，包括空格
-  // 注意：这与 SQL 语法不同，SQL 只允许反引号字符串（不包含空格）或单引号字符串
-  result = result.replace(
-    /(`[^`]+`)/g,
-    '<span class="sql-identifier">$1</span>'
-  );
-
-  return result;
-}
-
 interface ChatMessageProps {
     message: Message;
     containerClass?: string;
@@ -89,6 +27,11 @@ interface ChatMessageProps {
 
 export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessageProps) => {
     const { t } = useTranslation();
+    const { theme } = useThemeStore();
+    
+    // 判断当前是否为暗黑模式，用于代码高亮主题
+    const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+
     const [showRetryDetails, setShowRetryDetails] = useState(false);
     const [showTypewriter, setShowTypewriter] = useState(true);
 
@@ -151,42 +94,27 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
     // 自定义 Markdown 组件，特别是代码块的语法高亮
     const markdownComponents: Components = {
         code(props) {
-            const { children, className, ...rest } = props;
+            const { children, className, node, ...rest } = props;
             const match = /language-(\w+)/.exec(className || '');
             const isInline = !match && !className;
             
-            if (!isInline && match && match[1].toLowerCase() === 'sql') {
-                // SQL 代码块 - 使用语法高亮
-                const code = String(children).replace(/\n$/, '');
-                const highlightedCode = highlightSQLInMarkdown(code);
+            if (!isInline && match) {
+                const language = match[1].toLowerCase();
                 return (
                     <div className="my-3 border border-border rounded-xl overflow-hidden bg-card shadow-sm">
                         <div className="bg-muted/50 px-3 py-2 text-[10px] font-medium text-muted-foreground border-b border-border flex items-center gap-2">
-                            <span className="text-blue-500">SQL</span>
-                            <span className="opacity-50">{t('sqlBlock.statement')}</span>
+                            <span className="text-blue-500">{language === 'sql' ? 'SQL' : language.toUpperCase()}</span>
+                            {language === 'sql' && <span className="opacity-50">{t('sqlBlock.statement')}</span>}
                         </div>
-                        <pre className="p-3 overflow-x-auto text-xs font-mono leading-relaxed bg-card m-0">
-                            <code 
-                                dangerouslySetInnerHTML={{ __html: highlightedCode }}
-                                className="sql-highlight"
-                            />
-                        </pre>
-                    </div>
-                );
-            }
-            
-            if (!isInline) {
-                // 其他代码块 - 使用默认样式
-                return (
-                    <div className="my-3 border border-border rounded-xl overflow-hidden bg-card shadow-sm">
-                        <div className="bg-muted/50 px-3 py-2 text-[10px] font-medium text-muted-foreground border-b border-border">
-                            {match ? match[1].toUpperCase() : t('sqlBlock.code')}
-                        </div>
-                        <pre className="p-3 overflow-x-auto text-xs font-mono leading-relaxed bg-card m-0">
-                            <code className={className} {...rest}>
-                                {children}
-                            </code>
-                        </pre>
+                        {/* 使用 SyntaxHighlighter 替代危险的 dangerouslySetInnerHTML */}
+                        <SyntaxHighlighter
+                            {...(rest as any)}
+                            PreTag="div"
+                            children={String(children).replace(/\n$/, '')}
+                            language={language}
+                            style={isDark ? vscDarkPlus : vs}
+                            customStyle={{ margin: 0, padding: '0.75rem', fontSize: '0.75rem', backgroundColor: 'transparent' }}
+                        />
                     </div>
                 );
             }

@@ -127,7 +127,12 @@ export interface FinalAnswerEvent extends StreamEventBase {
   content: string;
   thinking?: string;
   sql?: string;
-  chartOption?: ChartOption;
+  chartOption?: any;
+}
+
+export interface AnswerChunkEvent extends StreamEventBase {
+  type: 'answer_chunk';
+  content: string;
 }
 
 export interface ErrorEvent extends StreamEventBase {
@@ -159,6 +164,7 @@ export type StreamEvent =
   | StatusEvent
   | ExecutionResultEvent
   | FinalAnswerEvent
+  | AnswerChunkEvent
   | ErrorEvent
   | ChartParseErrorEvent
   | EndEvent

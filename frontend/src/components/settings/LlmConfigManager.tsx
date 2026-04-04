@@ -199,17 +199,32 @@ export function LlmConfigManager({ configs = [], selectedId, onSelect, onUpdate 
         </div>
 
         {onSelect && (
-             <div className="p-1 bg-muted/50 rounded-xl border border-border">
-                <select 
-                    className="w-full text-sm bg-transparent border-none focus:ring-0 p-2 outline-none dark:bg-zinc-900 dark:text-gray-200"
-                    value={selectedId || ''}
-                    onChange={(e) => onSelect(e.target.value ? Number(e.target.value) : null)}
-                >
-                    <option value="">{t('settings.selectModel') || "Select Model..."}</option>
-                    {configs.map(c => (
-                        <option key={c.id} value={c.id}>{c.model_name} ({c.provider})</option>
-                    ))}
-                </select>
+             <div className="flex items-center gap-2">
+                 <div className="flex-1 p-1 bg-muted/50 rounded-xl border border-border">
+                    <select 
+                        className="w-full text-sm bg-transparent border-none focus:ring-0 p-2 outline-none dark:bg-zinc-900 dark:text-gray-200"
+                        value={selectedId || ''}
+                        onChange={(e) => onSelect(e.target.value ? Number(e.target.value) : null)}
+                    >
+                        <option value="">{t('settings.selectModel') || "Select Model..."}</option>
+                        {configs.map(c => (
+                            <option key={c.id} value={c.id}>{c.model_name} ({c.provider})</option>
+                        ))}
+                    </select>
+                 </div>
+                 <button
+                    onClick={() => {
+                        if (selectedId) {
+                            setIsOpen(true);
+                            handleEdit(selectedId);
+                        }
+                    }}
+                    disabled={!selectedId}
+                    className="p-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors disabled:opacity-50"
+                    title={t('settings.llm.edit') || "Edit"}
+                 >
+                    <Edit2 size={16} />
+                 </button>
              </div>
         )}
 

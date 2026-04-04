@@ -43,6 +43,11 @@ class Settings(BaseSettings):
         default=None, description="LangGraph Checkpoint 数据库连接 URL (PostgreSQL)"
     )
 
+    # === Redis 缓存配置 ===
+    REDIS_URL: str = Field(default="redis://localhost:6379/0", description="Redis 连接 URL")
+    SCHEMA_CACHE_TTL: int = Field(default=21600, description="Schema 缓存过期时间(秒)")
+
+
     # === 安全配置 ===
     JWT_SECRET_KEY: str = Field(
         default="your-secret-key-change-this-in-production", description="JWT 签名密钥"

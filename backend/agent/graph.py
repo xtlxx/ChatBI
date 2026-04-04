@@ -17,13 +17,14 @@ from models.db_connection import DbType
 
 from .prompts import (
   RESPONSE_GEN_PROMPT,
+  CHART_GEN_PROMPT,
   SCHEMA_CONTEXT,
   SQL_GEN_PROMPT,
   THINKING_PROMPT,
   format_few_shot_examples,
   select_few_shot_examples,
 )
-from .schemas import GenerateResponseOutput, GenerateSQLOutput
+from .schemas import GenerateResponseOutput, GenerateSQLOutput, EChartsConfig
 from .state import AgentState
 from .tools import DatabaseTools, validate_and_format_sql
 
@@ -200,11 +201,13 @@ class ChatBIAgent:
           }
 
         prompt_template = THINKING_PROMPT
-        chain = prompt_template | self.llm | StrOutputParser()
+        # 在 explicit_thinking 节点加上 tags 避免被流式输出误捕获
+        chain = prompt_template | self.llm.with_config({"tags": ["explicit_thinking_llm"]}) | StrOutputParser()
         thinking_text = await chain.ainvoke({
           "query": state["query"],
           "messages": state["messages"],
-          "schema_context": state.get("schema_context", "")
+          "schema_context": state.get("schema_context", ""),
+          "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
 
         duration_ms = (datetime.now() - node_start).total_seconds() * 1000
@@ -267,6 +270,7 @@ class ChatBIAgent:
             "messages": state["messages"],
             "schema_context": full_schema_context,
             "few_shot_examples": few_shot_examples_text,
+            "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
           }
         )
 
@@ -472,77 +476,77 @@ class ChatBIAgent:
         }
 
     # ────────────────────────────────────────────────
-    # 节点 5：生成最终响应 (🌟 重构：使用 Structured Output)
+    # 节点 5：生成最终响应 (🌟 重构：恢复流式输出)
     # ────────────────────────────────────────────────
     async def generate_response_node(state: AgentState) -> dict[str, Any]:
       node_start = datetime.now()
       try:
-        # 使用 Structured Output 强制返回 Pydantic 对象
-        structured_llm = self.llm.with_structured_output(GenerateResponseOutput)
-        prompt_template = RESPONSE_GEN_PROMPT
-        chain = prompt_template | structured_llm
+        import asyncio
+        from langchain_core.output_parsers import StrOutputParser
+
+        # 文本生成链（带标签以便流式输出时识别）
+        text_llm = self.llm.with_config({"tags": ["report_generator"]})
+        text_chain = RESPONSE_GEN_PROMPT | text_llm | StrOutputParser()
+
+        # 图表生成链
+        chart_llm = self.llm.with_structured_output(EChartsConfig)
+        chart_chain = CHART_GEN_PROMPT | chart_llm
 
         selected_examples = select_few_shot_examples(state["query"], max_examples=2, mode="response")
         few_shot_examples_text = format_few_shot_examples(selected_examples)
 
+        sql_result_data = (state.get("execution_result") or {}).get("data", [])
+        
+        # 截断数据，防止上下文过载
+        max_rows = 20
+        truncated_data = sql_result_data[:max_rows]
+        data_note = ""
+        if len(sql_result_data) > max_rows:
+            data_note = f"\n(注：为节省性能，仅展示前 {max_rows} 条样本，总数据共 {len(sql_result_data)} 条)"
+
+        sql_result_json = json.dumps(truncated_data, ensure_ascii=False, default=str) + data_note
+
         self.logger.info("generate_response_start",
           query=state["query"],
-          sql_result_length=len(str((state.get("execution_result") or {}).get("data", []))),
+          sql_result_length=len(sql_result_data),
           has_few_shot=bool(few_shot_examples_text))
 
-        import asyncio
         fallback_used = False
+        content = ""
+        chart_config = None
+
         try:
-          # 增加超时控制
-          result_obj = await asyncio.wait_for(
-            chain.ainvoke(
-              {
+          # 增加超时控制，并发执行文本和图表生成
+          content, chart_config = await asyncio.wait_for(
+            asyncio.gather(
+              text_chain.ainvoke({
                 "query": state["query"],
-                "sql_query": (state.get("sql_attempt") or {}).get("query", ""),
-                "sql_result": json.dumps(
-                    (state.get("execution_result") or {}).get("data", []),
-                    ensure_ascii=False, default=str
-                ),
+                "sql_result": sql_result_json,
                 "messages": state["messages"],
                 "few_shot_examples": few_shot_examples_text,
-              }
+                "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+              }),
+              chart_chain.ainvoke({
+                "query": state["query"],
+                "sql_result": sql_result_json,
+              })
             ),
             timeout=600.0
           )
         except TimeoutError:
           self.logger.warning("response_generation_timeout", duration_ms=600000)
           simple_report = self._generate_simple_report(state)
-          # 构造一个临时的 GenerateResponseOutput 对象
-          result_obj = GenerateResponseOutput(
-              content=simple_report["content"],
-              chart_option=None
-          )
+          content = simple_report["content"]
+          chart_config = None
           fallback_used = True
         except Exception as e:
-           # 捕获 chain 调用失败 (如解析错误)
            raise e
-        else:
-          fallback_used = False
 
-        if not isinstance(result_obj, GenerateResponseOutput):
-            # 兜底：如果 LLM 返回了 dict
-             if isinstance(result_obj, dict):
-                 result_obj = GenerateResponseOutput(**result_obj)
-             else:
-                 raise ValueError(f"Unexpected response type: {type(result_obj)}")
-
-        # 提取字段
-        content = result_obj.content
-        chart_config = result_obj.chart_option
-        
         # 转换为 dict 用于前端 (Pydantic model_dump)
         chart_dict = chart_config.model_dump(exclude_none=True) if chart_config else None
 
         # --- 关键修复：防止重复渲染错误信息 ---
-        # 如果当前状态本身就是一次 error recovery 的结果，或者之前有报错但最终生成了兜底的报告
-        # 我们需要在 content 中体现，但不要让其作为普通消息和前端错误框同时出现
         if state.get("has_error") and fallback_used:
-            # 在内容前追加明确的降级提示
             content = f"⚠️ **系统提示**：由于{state.get('last_error', '未知原因')}，未能完成完整分析。以下为系统直接提取的原始数据。\n\n---\n\n{content}"
 
         response_message = AIMessage(content=content)
@@ -776,15 +780,17 @@ class ChatBIAgent:
 
         # 1. 思考节点
         if kind == "on_chat_model_stream" and node_name == "explicit_thinking":
-          chunk = event["data"]["chunk"]
-          content = chunk.content
-          if content:
-              accumulated_thinking += content
-              yield {
-                "type": "thinking",
-                "content": content,
-                "done": False
-              }
+          tags = event.get("tags", [])
+          if "explicit_thinking_llm" in tags:
+              chunk = event["data"]["chunk"]
+              content = chunk.content
+              if content:
+                  accumulated_thinking += content
+                  yield {
+                    "type": "thinking",
+                    "content": content,
+                    "done": False
+                  }
         elif kind == "on_chain_end" and node_name == "explicit_thinking":
           if accumulated_thinking:
             self.logger.info(f"Explicit Thinking Process: {accumulated_thinking}")
@@ -862,7 +868,21 @@ class ChatBIAgent:
 
         # 5. 最终回答节点
         elif node_name == "generate_response":
-          if kind == "on_chain_start":
+          if kind == "on_chat_model_stream":
+            tags = event.get("tags", [])
+            if "report_generator" in tags:
+                chunk = event["data"]["chunk"]
+                if hasattr(chunk, "content"):
+                    content = chunk.content
+                else:
+                    content = str(chunk)
+                if content:
+                    yield {
+                        "type": "answer_chunk",
+                        "content": content,
+                        "done": False
+                    }
+          elif kind == "on_chain_start":
             self.logger.info("generate_response_node_started", session_id=session_id)
           elif kind == "on_chain_end":
             node_data = event["data"].get("output", {})

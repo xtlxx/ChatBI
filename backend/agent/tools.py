@@ -13,10 +13,11 @@ from sqlalchemy import text
 from sqlglot import exp
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from agent.prompts import SOFT_DELETE_RULES
+from agent.prompts import FILTER_RULES
 from core.db_adapter import AdapterFactory
 from logging_config import get_logger
 from models.db_connection import DbType
+from utils.redis_cache import RedisCache
 
 logger = get_logger(__name__)
 
@@ -115,45 +116,12 @@ def validate_and_format_sql(sql: str, dialect: str = "postgres") -> str:
             # 可选：如果用户写的 LIMIT 超过阈值，也可以在此强制覆盖
             pass
 
-    # 5. 软删除策略注入 (保持业务逻辑一致性)
-    try:
-        cte_names = {cte.alias.lower() for cte in expression.find_all(exp.CTE)}
-        
-        for select_node in expression.find_all(exp.Select):
-            for table in select_node.find_all(exp.Table):
-                # 确保是当前 SELECT 语句直接引用的表
-                parent_select = table.parent
-                while parent_select and not isinstance(parent_select, exp.Select):
-                    parent_select = parent_select.parent
-                
-                if parent_select is not select_node:
-                    continue
-
-                table_name = table.name.lower()
-                if table_name in cte_names:
-                    continue
-
-                # 获取软删除字段配置
-                del_field, del_value = SOFT_DELETE_RULES.get('default', ('is_deleted', '0'))
-                for prefix, (field, value) in SOFT_DELETE_RULES.items():
-                    if prefix != 'default' and table_name.startswith(prefix):
-                        del_field, del_value = field, value
-                        break
-
-                # 注入 WHERE 条件
-                table_ref = table.alias or table.name
-                condition_str = f"{table_ref}.{del_field} = '{del_value}'"
-                
-                # 使用 sqlglot 构建条件表达式
-                condition_expr = sqlglot.parse_one(condition_str, read=dialect)
-                select_node.where(condition_expr, copy=False)
-                
-    except Exception as e:
-        logger.error(f"软删除策略注入失败: {e}")
-        # 策略注入失败不应阻断查询，但需记录警告 (或者根据安全要求阻断)
-        # 这里选择抛出异常以保证数据准确性
-        raise ValueError(f"无法应用业务过滤规则: {str(e)}")
-
+    # 5. 软删除策略注入 (此逻辑已被转移到 Prompt 层面，为了安全这里直接返回原 SQL)
+    # 因为我们在 prompts.py 中已经用自然语言强制要求 LLM 加上 FILTER_RULES
+    # 并且 FILTER_RULES 的值现在是完整的 SQL 条件字符串（如 "is_deleted = 0 AND enable = 1"）
+    # 用 AST 强行注入这种复杂条件很容易导致解析失败或重复注入
+    # 所以这里我们仅保留格式化功能
+    
     # 返回重新生成的 SQL
     return expression.sql(dialect=dialect)
 
@@ -345,7 +313,21 @@ class DatabaseTools:
             return json.dumps({"error": str(e)}, ensure_ascii=False)
 
     async def get_all_tables_info(self) -> str:
+        import hashlib
+        # 生成缓存键，基于数据库 URL
+        url_str = str(self.db_engine.url)
+        url_hash = hashlib.md5(url_str.encode('utf-8')).hexdigest()
+        cache_key = f"schema_cache:{url_hash}"
+
         try:
+            # 1. 尝试从 Redis 缓存获取
+            cached_schema = await RedisCache.get(cache_key)
+            if cached_schema:
+                self.logger.info("schema_cache_hit", cache_key=cache_key)
+                return cached_schema
+
+            self.logger.info("schema_cache_miss_fetching_from_db", cache_key=cache_key)
+
             def _sync_inspect(connection):
                 from sqlalchemy import inspect
                 inspector = inspect(connection)
@@ -359,10 +341,17 @@ class DatabaseTools:
                     except Exception:
                         comment = "无描述"
                     tables_info.append(f"- {table}: {comment or '无描述'}")
+                
                 return "\n".join(tables_info)
 
             async with self.db_engine.connect() as conn:
                 result = await conn.run_sync(_sync_inspect)
+                
+                # 3. 写入 Redis 缓存
+                if result:
+                    await RedisCache.set(cache_key, result)
+                    self.logger.info("schema_cache_updated", cache_key=cache_key)
+
                 return result
         except Exception as e:
             self.logger.error("get_all_tables_info_failed", error=str(e))

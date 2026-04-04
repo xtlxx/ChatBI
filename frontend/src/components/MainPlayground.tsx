@@ -318,6 +318,12 @@ export function MainPlayground() {
                         } else if (event.type === 'execution_result') {
                             msg.executionResult = event.content;
                             msg.status = t('chat.status.querying');
+                        } else if (event.type === 'answer_chunk') {
+                            msg.content = (msg.content || '') + event.content;
+                            msg.status = undefined; // 清除状态，开始显示内容
+                            if (msg.thinkingStatus === 'thinking' || msg.thinkingStatus === 'idle') {
+                                msg.thinkingStatus = 'completed';
+                            }
                         } else if (event.type === 'chart_parse_error') {
                             // 图表解析失败降级处理
                             msg.chartOption = undefined;

@@ -14,6 +14,7 @@ from core.database import get_db
 from core.db_adapter import AdapterFactory, DatabaseDetector
 from models.db_connection import DbConnection, DbType
 from utils.jwt_auth import get_current_user_id
+from utils.redis_cache import RedisCache
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -161,6 +162,31 @@ async def delete_connection(connection_id: int, user_id: CurrentUserId, db: DbSe
     await db.delete(connection)
     await db.commit()
     return None
+
+@router.post("/{connection_id}/refresh-schema", status_code=status.HTTP_200_OK)
+async def refresh_schema_cache(connection_id: int, user_id: CurrentUserId, db: DbSession):
+    """手动刷新/清除特定数据库的 Schema 缓存"""
+    stmt = select(DbConnection).where(DbConnection.id == connection_id)
+    result = await db.execute(stmt)
+    connection = result.scalar_one_or_none()
+
+    if not connection or connection.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="数据库连接不存在")
+
+    try:
+        import hashlib
+        db_url = str(DatabaseDetector.get_connection_url(connection))
+        url_hash = hashlib.md5(db_url.encode('utf-8')).hexdigest()
+        cache_key = f"schema_cache:{url_hash}"
+        
+        success = await RedisCache.delete(cache_key)
+        if success:
+            return {"success": True, "message": "缓存已清除，下次查询将重新拉取表结构"}
+        else:
+            return {"success": True, "message": "未找到相关缓存，无需清除"}
+    except Exception as e:
+        logger.error(f"Failed to clear schema cache for connection {connection_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"清除缓存失败: {str(e)}")
 
 @router.post("/test", response_model=ConnectionTestResponse)
 async def test_connection_endpoint(data: DbConnectionCreate, user_id: CurrentUserId):

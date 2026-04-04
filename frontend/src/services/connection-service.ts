@@ -40,5 +40,10 @@ export const connectionService = {
   testConnection: async (data: DbConnectionCreate) => {
     const response = await api.post<ConnectionTestResponse>('/connections/test', data);
     return response.data;
+  },
+
+  refreshSchema: async (id: number) => {
+    const response = await api.post<{success: boolean; message: string}>(`/connections/${id}/refresh-schema`);
+    return response.data;
   }
 };

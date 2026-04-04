@@ -39,6 +39,7 @@ from routes.speech import router as speech_router
 from utils.agent_factory import agent_context
 from utils.engine_cache import EngineCache  # ✅ 导入 EngineCache 用于关机清理
 from utils.jwt_auth import get_current_user_id
+from utils.redis_cache import RedisCache
 
 logger = get_logger(__name__)
 
@@ -92,6 +93,9 @@ async def lifespan(app: FastAPI):
         async with db_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         logger.info("system_database_connected")
+        
+        # 初始化 Redis 缓存
+        await RedisCache.init_redis()
 
         if settings.CHECKPOINT_DATABASE_URL and settings.CHECKPOINT_DATABASE_URL.startswith("postgresql"):
                 checkpoint_pool = AsyncConnectionPool(
@@ -113,6 +117,8 @@ async def lifespan(app: FastAPI):
         logger.info("engine_cache_cleaned_up")
         # 清理系统数据库连接
         await db_engine.dispose()
+        # 清理 Redis 连接
+        await RedisCache.close_redis()
         if checkpoint_pool:
             await checkpoint_pool.close()
 
@@ -243,13 +249,15 @@ async def stream_agent_with_cleanup(
             if event_type == "final_answer":
                 content = event.get("content", "")
                 if content:
-                    full_answer += content
+                    full_answer = content
                 if event.get("chartOption"):
                     chart_option = event.get("chartOption")
                 if event.get("thinking"):
                     accumulated_thinking = event.get("thinking")
                 if event.get("sql"):
                     generated_sql = event.get("sql")
+            elif event_type == "answer_chunk":
+                full_answer += event.get("content", "")
             elif event_type == "thinking":
                 accumulated_thinking += event.get("content", "")
             elif event_type == "sql_generated":
