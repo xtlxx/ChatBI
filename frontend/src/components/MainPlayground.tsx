@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Share2, MoreVertical, PanelLeftClose, PanelLeftOpen, Loader2, Image as ImageIcon, Mic, Send, BarChart3, Database, TrendingUp, Package, Plus } from "lucide-react";
+import { Share2, MoreVertical, PanelLeftClose, PanelLeftOpen, Loader2, Mic, Send, BarChart3, Database, TrendingUp, Package } from "lucide-react";
 import { useOutletContext, useParams, useNavigate } from "react-router-dom";
 import { useChatSettingsStore } from "@/store/chat-settings-store";
 import { chatService } from "@/services/chat-service";
@@ -23,6 +23,7 @@ const CONTAINER_CLASS = "w-full max-w-3xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl
 
 export function MainPlayground() {
     const { t } = useTranslation();
+    const currentYear = new Date().getFullYear(); // 动态获取当前年份
     const {
         isLeftSidebarOpen,
         setIsLeftSidebarOpen,
@@ -179,13 +180,17 @@ export function MainPlayground() {
             // Map backend messages to frontend format
             const mappedMessages: Message[] = session.messages.map(msg => ({
                 id: msg.id,
-                role: msg.role === 'system' ? 'ai' : msg.role, // Treat system as AI for now or hide it
+                role: msg.role === 'system' ? 'ai' : (msg.role as 'user' | 'ai'), // Treat system as AI for now or hide it
                 content: msg.content,
                 thinking: msg.message_metadata?.thinking,
                 thinkingStatus: msg.message_metadata?.thinking ? 'completed' : undefined,
                 sql: msg.message_metadata?.sql_query,
+                data: (msg.message_metadata?.execution_result as any)?.data || msg.message_metadata?.data, // 兼容不同的数据保存路径
                 chartOption: (msg.message_metadata?.chartOption || msg.message_metadata?.chart_data) as ChartOption, // 兼容旧数据 chart_data
-                timestamp: msg.created_at ? new Date(msg.created_at).getTime() : Date.now()
+                executionTime: msg.message_metadata?.execution_time ? `${msg.message_metadata.execution_time}秒` : undefined,
+                executionSeconds: msg.message_metadata?.execution_time ? Number(msg.message_metadata.execution_time) : undefined,
+                timestamp: msg.created_at ? new Date(msg.created_at).getTime() : Date.now(),
+                isHistory: true // 标记为历史记录
             }));
 
             setMessages(mappedMessages);
@@ -317,6 +322,7 @@ export function MainPlayground() {
                             msg.status = event.content;
                         } else if (event.type === 'execution_result') {
                             msg.executionResult = event.content;
+                            msg.data = event.data; // Capture raw data for data preview
                             msg.status = t('chat.status.querying');
                         } else if (event.type === 'answer_chunk') {
                             msg.content = (msg.content || '') + event.content;
@@ -521,7 +527,7 @@ export function MainPlayground() {
                                     ].map((item) => (
                                         <button
                                             key={item.key}
-                                            onClick={() => setInput(t(`intro.examples.${item.key}.desc`))}
+                                            onClick={() => setInput(t(`intro.examples.${item.key}.desc`, { year: currentYear }))}
                                             className={`flex flex-col gap-3 p-4 rounded-xl bg-gradient-to-br ${item.color} border border-border/50 transition-all text-left group hover:shadow-md hover:-translate-y-0.5 duration-200`}
                                         >
                                             <div className="p-2.5 bg-background/80 w-fit rounded-xl shadow-sm">
@@ -529,7 +535,7 @@ export function MainPlayground() {
                                             </div>
                                             <div>
                                                 <p className="font-semibold text-foreground text-sm mb-0.5">{t(`intro.examples.${item.key}.label`)}</p>
-                                                <p className="text-xs text-muted-foreground leading-relaxed">{t(`intro.examples.${item.key}.desc`)}</p>
+                                                <p className="text-xs text-muted-foreground leading-relaxed">{t(`intro.examples.${item.key}.desc`, { year: currentYear })}</p>
                                             </div>
                                         </button>
                                     ))}
@@ -546,11 +552,7 @@ export function MainPlayground() {
             </div>
 
             <div className={`flex-shrink-0 p-4 bg-background z-20 ${CONTAINER_CLASS}`}>
-                <div className="relative flex items-end gap-2 bg-muted/50 hover:bg-muted/80 focus-within:bg-muted transition-colors rounded-[28px] p-2 border border-transparent focus-within:border-border/50 focus-within:shadow-md ring-offset-2 focus-within:ring-2 ring-primary/10">
-                    <button className="p-3 text-muted-foreground hover:text-primary hover:bg-background rounded-full transition-all flex-shrink-0" aria-label="Add image">
-                        <Plus size={20} />
-                    </button>
-
+                <div className="relative flex items-end gap-2 bg-muted/50 hover:bg-muted/80 focus-within:bg-muted transition-colors rounded-[28px] p-2 pl-4 border border-transparent focus-within:border-border/50 focus-within:shadow-md ring-offset-2 focus-within:ring-2 ring-primary/10">
                     <textarea
                         ref={textareaRef}
                         value={input}
@@ -565,13 +567,6 @@ export function MainPlayground() {
                     <div className="flex items-center gap-1 pb-1.5 pr-2">
                         {!input.trim() && (
                             <>
-                                <button 
-                                    className="p-2 text-muted-foreground hover:text-primary hover:bg-background rounded-full transition-all" 
-                                    aria-label="Upload image"
-                                    onClick={() => toast(t('common.comingSoon') || 'Feature coming soon', { icon: '🚧' })}
-                                >
-                                    <ImageIcon size={20} />
-                                </button>
                                 <button 
                                     className={`p-2 rounded-full transition-all ${isListening ? 'text-red-500 bg-red-100 dark:bg-red-900/30 animate-pulse' : 'text-muted-foreground hover:text-primary hover:bg-background'}`}
                                     aria-label="Voice input"

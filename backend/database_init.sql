@@ -142,6 +142,19 @@ VALUES (
 UPDATE username =
 VALUES(username), role = VALUES(role);
 -- ============================================
+-- 7. System Prompts
+-- 用于存储动态的系统 Prompt
+-- ============================================
+CREATE TABLE IF NOT EXISTS system_prompts (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    prompt_key VARCHAR(50) UNIQUE NOT NULL COMMENT 'Prompt唯一键',
+    content TEXT NOT NULL COMMENT 'Prompt内容',
+    description VARCHAR(255) COMMENT 'Prompt描述',
+    created_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    updated_at DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间'
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '系统提示词配置表';
+
+-- ============================================
 -- 完成
 -- ============================================
 SELECT 'Optimized database schema created successfully!' AS status;

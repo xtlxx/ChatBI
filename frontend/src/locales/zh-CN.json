@@ -56,15 +56,6 @@
       "execute": "查询数据",
       "response": "生成回答"
     },
-    "thinking": {
-      "timeout": "思考时间较长，请耐心等待",
-      "start": "开始分析...",
-      "process": "思考中...",
-      "done": "分析完成",
-      "error": "处理异常",
-      "waiting": "等待思考内容..."
-    },
-    "thoughts": "思考过程",
     "status": {
       "connecting": "正在连接 AI 引擎...",
       "thinking": "正在深度思考...",
@@ -106,11 +97,11 @@
     "examples": {
       "sales": {
         "label": "销售趋势",
-        "desc": "2025年各月订单金额趋势如何？"
+        "desc": "{{year}}年各月订单金额趋势如何？"
       },
       "customer": {
         "label": "客户统计",
-        "desc": "2025年安踏总共订单时多少双？"
+        "desc": "{{year}}年安踏总共订单时多少双？"
       },
       "material": {
         "label": "物料分析",

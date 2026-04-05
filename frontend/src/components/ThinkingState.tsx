@@ -164,13 +164,20 @@ export function ThinkingState({ status = 'idle', content, currentStep, elapsedTi
         
         if (newContent === oldContent) return;
 
+        // 对于已完成的历史记录，直接跳过流式动画，瞬间渲染
+        if (status === 'completed' || status === 'error' || status === 'idle') {
+            reset(newContent);
+            prevContentRef.current = newContent;
+            return;
+        }
+
         if (newContent.startsWith(oldContent)) {
             addChunk(newContent.slice(oldContent.length));
         } else {
             reset(newContent);
         }
         prevContentRef.current = newContent;
-    }, [content, addChunk, reset]);
+    }, [content, status, addChunk, reset]);
 
     const pipelineIndex = detectCurrentPipelineStep(currentStep);
     const isActive = displayStatus === 'thinking' || displayStatus === 'starting';

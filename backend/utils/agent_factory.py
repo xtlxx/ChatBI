@@ -16,6 +16,8 @@ from logging_config import get_logger
 from models.db_connection import DbConnection
 from models.llm_config import LlmConfig, LlmProvider
 from utils.engine_cache import EngineCache
+from utils.prompt_manager import PromptManager
+from agent.prompts import THINKING_SYSTEM, SQL_GEN_SYSTEM, RESPONSE_GEN_SYSTEM, CHART_GEN_SYSTEM
 
 logger = get_logger(__name__)
 
@@ -91,13 +93,27 @@ async def agent_context(
 
             llm = ChatOpenAI(**openai_kwargs)
 
-        # 5. 创建 Agent
+        # 5. Load dynamic prompts
+        thinking_sys = await PromptManager.get_prompt(db_session, "THINKING_SYSTEM", THINKING_SYSTEM)
+        sql_gen_sys = await PromptManager.get_prompt(db_session, "SQL_GEN_SYSTEM", SQL_GEN_SYSTEM)
+        response_gen_sys = await PromptManager.get_prompt(db_session, "RESPONSE_GEN_SYSTEM", RESPONSE_GEN_SYSTEM)
+        chart_gen_sys = await PromptManager.get_prompt(db_session, "CHART_GEN_SYSTEM", CHART_GEN_SYSTEM)
+
+        dynamic_prompts = {
+            "THINKING_SYSTEM": thinking_sys,
+            "SQL_GEN_SYSTEM": sql_gen_sys,
+            "RESPONSE_GEN_SYSTEM": response_gen_sys,
+            "CHART_GEN_SYSTEM": chart_gen_sys,
+        }
+
+        # 6. 创建 Agent
         agent = ChatBIAgent(
             db_engine=target_db_engine,
             retriever=None,
             llm=llm,
             checkpointer=checkpointer,
             db_type=db_conn_config.type,
+            dynamic_prompts=dynamic_prompts,
         )
         
         yield agent

@@ -174,8 +174,6 @@ async def save_chat_message(
     metadata: dict[str, Any] | None = None,
 ) -> None:
     try:
-        if metadata and "thinking" in metadata and isinstance(metadata["thinking"], str) and len(metadata["thinking"]) > 5000:
-            metadata["thinking"] = metadata["thinking"][:5000] + "..."
         stmt = select(ChatSession).where(ChatSession.id == session_id)
         result = await db.execute(stmt)
         session = result.scalar_one_or_none()
@@ -282,13 +280,18 @@ async def stream_agent_with_cleanup(
         # 使用 asyncio.shield 保护持久化过程，防止因客户端断开连接被中止
         try:
             content_to_save = full_answer if full_answer else (error_msg or "无回答")
+            # 扩展存储完整的信息
             msg_metadata = {
                 "sql_query": generated_sql,
                 "thinking": accumulated_thinking,
                 "chartOption": chart_option,
                 "error": error_msg,
-                "execution_time": round(execution_time, 2)
+                "execution_time": round(execution_time, 2),
+                "used_prompts": getattr(agent_instance, "dynamic_prompts", {}) # 保存执行时使用的确切Prompt快照
             }
+            # 如果有图表生成时的执行数据，可以在此处记录，如果这里拿不到原始数据，需要在 graph 中抛出
+            # 这里先将已知的数据全部存下
+            
             # 使用 shield 保护，防止当前 Task 被取消影响保存
             await asyncio.shield(save_chat_message(
                 system_db, session_id, "ai", content_to_save, user_id, msg_metadata

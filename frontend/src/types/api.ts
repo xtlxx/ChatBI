@@ -108,6 +108,7 @@ export interface StatusEvent extends StreamEventBase {
 export interface ExecutionResultEvent extends StreamEventBase {
   type: 'execution_result';
   content: string;
+  data?: any; // 新增：用于存放原始查询结果
 }
 
 export interface ChartOption {

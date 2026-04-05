@@ -56,15 +56,6 @@
       "execute": "Execute Query",
       "response": "Generate Response"
     },
-    "thinking": {
-      "timeout": "Thinking is taking longer than expected, please wait...",
-      "start": "Starting Analysis...",
-      "process": "Thinking...",
-      "done": "Analysis Complete",
-      "error": "Processing Error",
-      "waiting": "Waiting for thought process..."
-    },
-    "thoughts": "Thought Process",
     "status": {
       "connecting": "Connecting to AI Engine...",
       "thinking": "Deep thinking...",
@@ -106,11 +97,11 @@
     "examples": {
       "sales": {
         "label": "Sales Trend",
-        "desc": "What is the order amount trend for each month in 2025?"
+        "desc": "What is the order amount trend for each month in {{year}}?"
       },
       "customer": {
         "label": "Customer Stats",
-        "desc": "How many pairs did Anta order in 2025?"
+        "desc": "How many pairs did Anta order in {{year}}?"
       },
       "material": {
         "label": "Material Analysis",

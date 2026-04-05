@@ -14,8 +14,10 @@ export interface Message {
     executionTime?: string;  // 执行耗时，如 "3.45秒"
     executionSeconds?: number;  // 执行秒数
     chartOption?: ChartOption;
+    data?: any;              // 原始执行数据
     isLoading?: boolean;
     isError?: boolean;
     retryErrors?: string[];   // 重试过程中的错误（不显示在正文中）
     timestamp: number;
+    isHistory?: boolean;      // 是否为加载的历史记录
 }

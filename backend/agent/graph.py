@@ -16,14 +16,15 @@ from logging_config import get_logger
 from models.db_connection import DbType
 
 from .prompts import (
-  RESPONSE_GEN_PROMPT,
-  CHART_GEN_PROMPT,
+  THINKING_SYSTEM,
+  SQL_GEN_SYSTEM,
+  RESPONSE_GEN_SYSTEM,
+  CHART_GEN_SYSTEM,
   SCHEMA_CONTEXT,
-  SQL_GEN_PROMPT,
-  THINKING_PROMPT,
   format_few_shot_examples,
   select_few_shot_examples,
 )
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from .schemas import GenerateResponseOutput, GenerateSQLOutput, EChartsConfig
 from .state import AgentState
 from .tools import DatabaseTools, validate_and_format_sql
@@ -32,12 +33,14 @@ logger = get_logger(__name__)
 
 class ChatBIAgent:
   def __init__(
-    self, db_engine, retriever=None, llm=None, checkpointer=None, db_type: DbType = DbType.mysql
+    self, db_engine, retriever=None, llm=None, checkpointer=None, db_type: DbType = DbType.mysql,
+    dynamic_prompts: dict[str, str] = None
   ):
     self.db_engine = db_engine
     self.retriever = retriever
     self.checkpointer = checkpointer if checkpointer else MemorySaver()
     self.db_type = db_type
+    self.dynamic_prompts = dynamic_prompts or {}
     self.logger = get_logger(self.__class__.__name__)
 
     if llm:
@@ -47,6 +50,30 @@ class ChatBIAgent:
 
     self.db_tools = DatabaseTools(db_engine, db_type=db_type)
     self.adapter = AdapterFactory.get_adapter(db_type)
+
+    # 动态构造 Prompts
+    self.thinking_prompt = ChatPromptTemplate.from_messages([
+        ("system", self.dynamic_prompts.get("THINKING_SYSTEM", THINKING_SYSTEM)),
+        MessagesPlaceholder(variable_name="messages"),
+        ("human", "{query}"),
+    ])
+
+    self.sql_gen_prompt = ChatPromptTemplate.from_messages([
+        ("system", self.dynamic_prompts.get("SQL_GEN_SYSTEM", SQL_GEN_SYSTEM)),
+        MessagesPlaceholder(variable_name="messages"),
+        ("human", "用户问题：{query}\n\nSchema Context（必须严格遵守）：\n{schema_context}\n\n请直接输出 JSON。"),
+    ])
+
+    self.response_gen_prompt = ChatPromptTemplate.from_messages([
+        ("system", self.dynamic_prompts.get("RESPONSE_GEN_SYSTEM", RESPONSE_GEN_SYSTEM)),
+        MessagesPlaceholder(variable_name="messages"),
+        ("human", "用户问题：{query}\n\nSQL 查询结果（JSON 格式）：{sql_result}\n\n请生成完整的分析报告。"),
+    ])
+
+    self.chart_gen_prompt = ChatPromptTemplate.from_messages([
+        ("system", self.dynamic_prompts.get("CHART_GEN_SYSTEM", CHART_GEN_SYSTEM)),
+        ("human", "用户问题：{query}\nSQL 结果：{sql_result}"),
+    ])
 
     self.logger.info(
       "agent_initialized",
@@ -200,7 +227,7 @@ class ChatBIAgent:
             "steps": ["explicit_thinking_skipped"],
           }
 
-        prompt_template = THINKING_PROMPT
+        prompt_template = self.thinking_prompt
         # 在 explicit_thinking 节点加上 tags 避免被流式输出误捕获
         chain = prompt_template | self.llm.with_config({"tags": ["explicit_thinking_llm"]}) | StrOutputParser()
         thinking_text = await chain.ainvoke({
@@ -261,7 +288,7 @@ class ChatBIAgent:
         few_shot_examples_text = format_few_shot_examples(selected_examples)
 
         structured_llm = self.llm.with_structured_output(GenerateSQLOutput)
-        prompt_template = SQL_GEN_PROMPT
+        prompt_template = self.sql_gen_prompt
         chain = prompt_template | structured_llm
 
         result = await chain.ainvoke(
@@ -486,11 +513,11 @@ class ChatBIAgent:
 
         # 文本生成链（带标签以便流式输出时识别）
         text_llm = self.llm.with_config({"tags": ["report_generator"]})
-        text_chain = RESPONSE_GEN_PROMPT | text_llm | StrOutputParser()
+        text_chain = self.response_gen_prompt | text_llm | StrOutputParser()
 
         # 图表生成链
         chart_llm = self.llm.with_structured_output(EChartsConfig)
-        chart_chain = CHART_GEN_PROMPT | chart_llm
+        chart_chain = self.chart_gen_prompt | chart_llm
 
         selected_examples = select_few_shot_examples(state["query"], max_examples=2, mode="response")
         few_shot_examples_text = format_few_shot_examples(selected_examples)

@@ -1,11 +1,12 @@
 import { memo, useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, CheckCircle2, Sparkles, ChevronDown, ChevronRight, RefreshCw, SparklesIcon } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Sparkles, ChevronDown, ChevronRight, RefreshCw, Database, Table } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import * as Dialog from '@radix-ui/react-dialog';
 
 // 引入成熟的语法高亮库
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -43,8 +44,8 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
     const [displayedText, setDisplayedText] = useState('');
     const prevContentRef = useRef('');
     
-    // 是否需要流式效果：仅对 AI 消息且有内容、非错误时
-    const shouldStream = showTypewriter && msg.role === 'ai' && !msg.isError;
+    // 是否需要流式效果：仅对 AI 消息且有内容、非错误时，且不是历史记录时才开启打字机效果
+    const shouldStream = showTypewriter && msg.role === 'ai' && !msg.isError && !msg.isHistory;
     // 判断流是否结束：非 loading 即为结束
     const streamDone = !msg.isLoading;
 
@@ -77,11 +78,11 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
         prevContentRef.current = newContent;
     }, [rawContent, shouldStream, addChunk, reset]);
 
-    // 当新消息到达时重置状态
+    // 当新消息到达或从流式切换到非流式时重置状态
     useEffect(() => {
         prevContentRef.current = '';
         reset('');
-    }, [msg.id, reset]);
+    }, [msg.id, reset, shouldStream]);
 
     // 不流式时，直接显示内容（使用 derived state）
     const finalDisplayedText = shouldStream ? displayedText : (rawContent || '');
@@ -205,11 +206,70 @@ content={(msg.thinking || '') + (msg.sqlThought ? '\n\n**技术思考 (SQL Strat
                                 <SqlBlock sql={msg.sql} />
                             )}
 
-                            {/* === EXECUTION RESULT === */}
+                            {/* === EXECUTION RESULT / RAW DATA PREVIEW === */}
                             {msg.executionResult && (
-                                <div className="my-3 px-3 py-2.5 bg-emerald-50/50 dark:bg-emerald-950/20 rounded-lg text-xs flex items-center gap-2.5 border border-emerald-200/50 dark:border-emerald-800/30">
-                                    <CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0" />
-                                    <span className="text-emerald-700 dark:text-emerald-300 font-medium">{msg.executionResult}</span>
+                                <div className="my-3 flex items-center justify-between px-3 py-2.5 bg-emerald-50/50 dark:bg-emerald-950/20 rounded-lg border border-emerald-200/50 dark:border-emerald-800/30">
+                                    <div className="flex items-center gap-2.5 text-xs">
+                                        <CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0" />
+                                        <span className="text-emerald-700 dark:text-emerald-300 font-medium">{msg.executionResult}</span>
+                                    </div>
+                                    
+                                    {/* 提供查看原始数据的入口 */}
+                                    {msg.data && Array.isArray(msg.data) && msg.data.length > 0 && (
+                                        <Dialog.Root>
+                                            <Dialog.Trigger asChild>
+                                                <button className="flex items-center gap-1 text-[10px] text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300 bg-emerald-100/50 dark:bg-emerald-900/30 px-2 py-1 rounded transition-colors">
+                                                    <Table size={12} />
+                                                    <span>查看数据</span>
+                                                </button>
+                                            </Dialog.Trigger>
+                                            <Dialog.Portal>
+                                                <Dialog.Overlay className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 data-[state=open]:animate-fadeIn" />
+                                                <Dialog.Content className="fixed left-[50%] top-[50%] translate-x-[-50%] translate-y-[-50%] w-[90vw] max-w-4xl max-h-[85vh] bg-background rounded-xl shadow-2xl border border-border flex flex-col z-50 data-[state=open]:animate-slideUp">
+                                                    <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                                                        <Dialog.Title className="text-sm font-semibold flex items-center gap-2">
+                                                            <Database size={16} className="text-primary" />
+                                                            原始查询结果 ({msg.data.length} 行)
+                                                        </Dialog.Title>
+                                                        <Dialog.Close asChild>
+                                                            <button className="text-muted-foreground hover:text-foreground transition-colors">
+                                                                <AlertCircle size={16} className="rotate-45" />
+                                                            </button>
+                                                        </Dialog.Close>
+                                                    </div>
+                                                    <div className="overflow-auto p-4 flex-1">
+                                                        <div className="rounded-lg border border-border overflow-hidden">
+                                                            <table className="w-full text-sm text-left">
+                                                                <thead className="text-xs uppercase bg-muted/50 text-muted-foreground sticky top-0">
+                                                                    <tr>
+                                                                        {Object.keys(msg.data[0]).map(key => (
+                                                                            <th key={key} className="px-4 py-3 font-medium whitespace-nowrap">{key}</th>
+                                                                        ))}
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody className="divide-y divide-border">
+                                                                    {msg.data.slice(0, 100).map((row, i) => (
+                                                                        <tr key={i} className="hover:bg-muted/30 transition-colors">
+                                                                            {Object.values(row).map((val: any, j) => (
+                                                                                <td key={j} className="px-4 py-2 whitespace-nowrap">
+                                                                                    {val === null ? <span className="text-muted-foreground/50 italic">null</span> : String(val)}
+                                                                                </td>
+                                                                            ))}
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                        {msg.data.length > 100 && (
+                                                            <div className="text-center text-xs text-muted-foreground mt-3">
+                                                                * 仅显示前 100 行数据，导出功能开发中
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </Dialog.Content>
+                                            </Dialog.Portal>
+                                        </Dialog.Root>
+                                    )}
                                 </div>
                             )}
 
@@ -222,7 +282,7 @@ content={(msg.thinking || '') + (msg.sqlThought ? '\n\n**技术思考 (SQL Strat
                                             onClick={handleSkipTyping}
                                             className="mb-3 text-xs text-muted-foreground/60 hover:text-primary transition-colors flex items-center gap-1.5"
                                         >
-                                            <SparklesIcon size={12} />
+                                            <Sparkles size={12} />
                                             {t('chat.status.skip')} · {Math.round(progress * 100)}%
                                         </button>
                                     )}
@@ -263,8 +323,8 @@ content={(msg.thinking || '') + (msg.sqlThought ? '\n\n**技术思考 (SQL Strat
                                         <span>{t('chat.status.failed')}</span>
                                     </div>
                                     
-                                    {/* 仅当 content 不是通过降级生成的长篇 Markdown 报告时才在此处显示，避免重复 */}
-                                    {msg.content && !msg.content.includes('⚠️ **系统提示**') && (
+                                    {/* 仅当没有生成长篇 Markdown 报告，且内容真的是纯报错文本时才渲染 */}
+                                    {msg.content && !finalDisplayedText && (
                                         <div className="text-xs text-red-600/90 dark:text-red-300/90 bg-white/50 dark:bg-black/20 p-3 rounded border border-red-100 dark:border-red-900/30 font-mono whitespace-pre-wrap break-all max-h-60 overflow-y-auto">
                                             {msg.content}
                                         </div>
