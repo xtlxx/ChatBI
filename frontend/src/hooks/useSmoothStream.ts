@@ -51,7 +51,8 @@ export function useSmoothStream({ onUpdate, streamDone, minDelay = 10 }: UseSmoo
 
         // 3. Dynamic speed control
         // Render 1/5 of the queue or 1 char, whichever is larger.
-        const count = Math.max(1, Math.floor(queueRef.current.length / 5));
+        // 加快渲染速度，特别是在大量内容堆积时，减少重绘次数
+        const count = Math.max(10, Math.floor(queueRef.current.length / 3));
         
         // 4. Extract chars
         const charsToRender = queueRef.current.splice(0, count);

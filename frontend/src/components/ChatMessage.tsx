@@ -136,6 +136,17 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                 );
             }
             
+            // 表格，增加 overflow-x-auto 包装容器
+            table({ children, ...rest }) {
+                return (
+                    <div className="w-full overflow-x-auto my-4 rounded-lg border border-border bg-card shadow-sm">
+                        <table className="w-full text-sm text-left m-0 border-0" {...rest}>
+                            {children}
+                        </table>
+                    </div>
+                );
+            },
+            
             // 行内代码
             return (
                 <code className="px-1.5 py-0.5 bg-muted/50 rounded text-xs font-mono text-pink-600 dark:text-pink-400" {...rest}>
