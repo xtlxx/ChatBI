@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { useAuthStore } from '@/store/auth-store';
+import toast from 'react-hot-toast';
 
 const api = axios.create({
   baseURL: '/api', // Proxied by Vite to http://localhost:8000
@@ -44,7 +45,15 @@ api.interceptors.response.use(
           isUnauthorizedHandled = false;
         }, 1000);
       }
+    } else if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      toast.error('Request timed out. Please try again later.');
+    } else if (!error.response && error.request) {
+      // Network error (no response received)
+      toast.error('Network error. Please check your connection.');
+    } else if (error.response?.status >= 500) {
+      toast.error(`Server error (${error.response.status}). Please try again later.`);
     }
+
     return Promise.reject(error);
   }
 );

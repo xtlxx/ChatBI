@@ -95,21 +95,26 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
     }
   }, []);
 
-  // 使用 ResizeObserver 实现图表的响应式渲染
+  // 使用 ResizeObserver 实现图表的响应式渲染，增加防抖 (Debounce)
   useEffect(() => {
     if (!containerRef.current) return;
 
+    let timeoutId: ReturnType<typeof setTimeout>;
+
     const resizeObserver = new ResizeObserver(() => {
-      // 使用 requestAnimationFrame 优化性能
-      requestAnimationFrame(() => {
-        refreshChart();
-      });
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        requestAnimationFrame(() => {
+          refreshChart();
+        });
+      }, 150); // 150ms 防抖
     });
 
     // 只监听容器宽度的变化，避免不必要的触发
     resizeObserver.observe(containerRef.current);
     
     return () => {
+      clearTimeout(timeoutId);
       resizeObserver.disconnect();
     };
   }, [refreshChart]);

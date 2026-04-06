@@ -9,15 +9,9 @@ import { ChatMessage } from "@/components/ChatMessage";
 import { ModelSelector } from "@/components/ModelSelector";
 import type { Message } from "@/types/chat";
 import type { ChartOption } from "@/types/api";
+import type { LayoutContext } from "@/types/layout";
 
 import { speechService } from "@/services/speech-service";
-
-interface LayoutContext {
-    isLeftSidebarOpen: boolean;
-    setIsLeftSidebarOpen: (v: boolean) => void;
-    sidebarView: 'nav' | 'settings';
-    setSidebarView: (v: 'nav' | 'settings') => void;
-}
 
 const CONTAINER_CLASS = "w-full max-w-[min(95vw,1400px)] mx-auto transition-all duration-300 ease-in-out";
 
