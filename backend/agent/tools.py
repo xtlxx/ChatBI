@@ -214,49 +214,71 @@ class DatabaseTools:
             self.logger.info("sql_secured_and_formatted", final_query=final_query[:200])
 
             # 2. 执行查询
+            import asyncio
+            from sqlalchemy.exc import DBAPIError
             async with self.db_engine.connect() as conn:
-                # 使用 text() 包装 SQL 字符串
-                result = await conn.execute(text(final_query))
+                try:
+                    # 1. 数据库级别的超时保护：让数据库自己杀掉超过 30 秒的查询 (30000毫秒)
+                    # 优先保护 MySQL，其他数据库如果不支持此语法可能会静默失败或被忽略，这没关系
+                    if self.db_type == DbType.mysql:
+                        await conn.execute(text("SET SESSION MAX_EXECUTION_TIME=30000;"))
 
-                # 获取列名
-                columns = result.keys()
+                    # 2. Python 协程级别的超时保护 (作为兜底)
+                    result = await asyncio.wait_for(conn.execute(text(final_query)), timeout=32.0)
 
-                # 内存的第二道防线：限制 Python 端拉取的行数
-                # 既然 SQL 已经强制 LIMIT 100，这里保持一致
-                limit = 100 
-                rows = result.fetchmany(limit + 1)
+                    # 获取列名
+                    columns = result.keys()
 
-                is_truncated = False
-                if len(rows) > limit:
-                    is_truncated = True
-                    rows = rows[:limit]
+                    # 内存的第二道防线：限制 Python 端拉取的行数
+                    # 既然 SQL 已经强制 LIMIT 100，这里保持一致
+                    limit = 100 
+                    rows = result.fetchmany(limit + 1)
 
-                # 3. 数据转换与敏感字段过滤
-                sensitive_keywords = {"password", "secret", "key", "token", "hash", "pwd", "salt"}
-                data = []
-                for row in rows:
-                    row_dict = dict(zip(columns, row))
-                    filtered_dict = {
-                        k: v for k, v in row_dict.items() 
-                        if not any(kw in k.lower() for kw in sensitive_keywords)
+                    is_truncated = False
+                    if len(rows) > limit:
+                        is_truncated = True
+                        rows = rows[:limit]
+
+                    # 3. 数据转换与敏感字段过滤
+                    sensitive_keywords = {"password", "secret", "key", "token", "hash", "pwd", "salt"}
+                    data = []
+                    for row in rows:
+                        row_dict = dict(zip(columns, row))
+                        filtered_dict = {
+                            k: v for k, v in row_dict.items() 
+                            if not any(kw in k.lower() for kw in sensitive_keywords)
+                        }
+                        data.append(filtered_dict)
+                        
+                    row_count = len(data) if not is_truncated else f"{limit}+"
+
+                    response = {
+                        "success": True,
+                        "executed_sql": final_query,
+                        "row_count": row_count,
+                        "data": data,
+                        "truncated": is_truncated,
+                        "message": "查询成功"
+                        + (" (结果已截断)" if is_truncated else f"，共 {row_count} 行"),
                     }
-                    data.append(filtered_dict)
-                    
-                row_count = len(data) if not is_truncated else f"{limit}+"
 
-                response = {
-                    "success": True,
-                    "executed_sql": final_query,
-                    "row_count": row_count,
-                    "data": data,
-                    "truncated": is_truncated,
-                    "message": "查询成功"
-                    + (" (结果已截断)" if is_truncated else f"，共 {row_count} 行"),
-                }
+                    self.logger.info("sql_query_executed", row_count=row_count)
 
-                self.logger.info("sql_query_executed", row_count=row_count)
-
-                return json.dumps(response, ensure_ascii=False, default=safe_serializer)
+                    return json.dumps(response, ensure_ascii=False, default=safe_serializer)
+                except asyncio.TimeoutError:
+                    # 显式回滚连接，防止连接池污染
+                    await conn.rollback()
+                    # 将明确的错误信息返回给大模型，让它知道需要优化 SQL
+                    return json.dumps({"error": "SQL 查询执行超时 (超过30秒)。这通常是因为数据量过大或缺少索引，请尝试优化查询（例如添加 LIMIT、优化 JOIN 或避免全表扫描）。", "query": final_query}, ensure_ascii=False)
+                except DBAPIError as e:
+                    # 捕获 MySQL 返回的超时错误 (通常 MAX_EXECUTION_TIME 触发时会报 3024 错误)
+                    await conn.rollback()
+                    if '3024' in str(e) or 'timeout' in str(e).lower() or 'max_execution_time' in str(e).lower():
+                        return json.dumps({"error": "数据库层面执行超时。请优化你的 SQL 查询以减少计算量。", "query": final_query}, ensure_ascii=False)
+                    return json.dumps({"error": f"数据库执行错误 {str(e)}", "query": final_query}, ensure_ascii=False)
+                except Exception as e:
+                    await conn.rollback()
+                    return json.dumps({"error": f"执行错误 {str(e)}", "query": final_query}, ensure_ascii=False)
 
         except Exception as e:
             self.logger.error("sql_query_failed", error=str(e), query=query[:200], exc_info=True)
