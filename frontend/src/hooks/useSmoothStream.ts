@@ -8,7 +8,7 @@ interface UseSmoothStreamOptions {
 
 export function useSmoothStream({ onUpdate, streamDone, minDelay = 10 }: UseSmoothStreamOptions) {
     const queueRef = useRef<string[]>([]);
-    const rafRef = useRef<number | null>(null);
+    const updateTaskRef = useRef<number | null>(null);
     const lastUpdateTimeRef = useRef<number>(0);
     const displayedTextRef = useRef<string>('');
     const streamDoneRef = useRef(streamDone);
@@ -24,93 +24,94 @@ export function useSmoothStream({ onUpdate, streamDone, minDelay = 10 }: UseSmoo
     }, [onUpdate]);
 
     // Main loop function - stable across renders
-    const renderLoopRef = useRef<(timestamp: number) => void>(undefined);
+    const renderLoopRef = useRef<((deadline?: IdleDeadline) => void) | undefined>(undefined);
 
-    const renderLoop = useCallback((timestamp: number) => {
+    const renderLoop = useCallback((deadline?: IdleDeadline) => {
+        const now = performance.now();
+        
         // 1. If queue is empty
         if (queueRef.current.length === 0) {
             if (streamDoneRef.current) {
-                // Stream is done and queue is empty -> Stop loop
-                rafRef.current = null;
+                updateTaskRef.current = null;
                 return;
             }
-            // Stream not done -> Keep waiting
             if (renderLoopRef.current) {
-                rafRef.current = requestAnimationFrame(renderLoopRef.current);
+                // @ts-ignore
+                updateTaskRef.current = (window.requestIdleCallback || window.requestAnimationFrame)(renderLoopRef.current);
             }
             return;
         }
 
-        // 2. Time control
-        if (timestamp - lastUpdateTimeRef.current < minDelay) {
+        // 2. Time control or Idle time check
+        if (now - lastUpdateTimeRef.current < minDelay || (deadline && deadline.timeRemaining() < 1)) {
             if (renderLoopRef.current) {
-                rafRef.current = requestAnimationFrame(renderLoopRef.current);
+                // @ts-ignore
+                updateTaskRef.current = (window.requestIdleCallback || window.requestAnimationFrame)(renderLoopRef.current);
             }
             return;
         }
 
         // 3. Dynamic speed control
-        // Render 1/5 of the queue or 1 char, whichever is larger.
-        // 加快渲染速度，特别是在大量内容堆积时，减少重绘次数
-        const count = Math.max(10, Math.floor(queueRef.current.length / 3));
+        const count = Math.max(15, Math.floor(queueRef.current.length / 3));
         
         // 4. Extract chars
         const charsToRender = queueRef.current.splice(0, count);
         displayedTextRef.current += charsToRender.join('');
-        lastUpdateTimeRef.current = timestamp;
+        lastUpdateTimeRef.current = now;
 
         // 5. Update UI
         onUpdateRef.current(displayedTextRef.current);
 
         // 6. Continue loop
         if (renderLoopRef.current) {
-            rafRef.current = requestAnimationFrame(renderLoopRef.current);
+            // @ts-ignore
+            updateTaskRef.current = (window.requestIdleCallback || window.requestAnimationFrame)(renderLoopRef.current);
         }
-    }, [minDelay]); // Only depends on minDelay which is usually static
+    }, [minDelay]);
 
-    // Update ref whenever renderLoop changes
     useEffect(() => {
         renderLoopRef.current = renderLoop;
     }, [renderLoop]);
 
-    // Reset state
     const reset = useCallback((initialText = '') => {
-        if (rafRef.current) {
-            cancelAnimationFrame(rafRef.current);
-            rafRef.current = null;
+        if (updateTaskRef.current !== null) {
+            // @ts-ignore
+            (window.cancelIdleCallback || window.cancelAnimationFrame)(updateTaskRef.current);
+            updateTaskRef.current = null;
         }
         queueRef.current = [];
         displayedTextRef.current = initialText;
         lastUpdateTimeRef.current = 0;
         onUpdateRef.current(initialText);
         
-        // Restart loop if needed (though usually reset implies new stream)
         if (!streamDoneRef.current && renderLoopRef.current) {
-            rafRef.current = requestAnimationFrame(renderLoopRef.current);
+            // @ts-ignore
+            updateTaskRef.current = (window.requestIdleCallback || window.requestAnimationFrame)(renderLoopRef.current);
         }
     }, []);
 
-    // Add text chunk
     const addChunk = useCallback((chunk: string) => {
         if (!chunk) return;
         const chars = Array.from(chunk);
         queueRef.current.push(...chars);
         
-        // Ensure loop is running
-        if (!rafRef.current && renderLoopRef.current) {
-             rafRef.current = requestAnimationFrame(renderLoopRef.current);
+        if (updateTaskRef.current === null && renderLoopRef.current) {
+            // @ts-ignore
+            updateTaskRef.current = (window.requestIdleCallback || window.requestAnimationFrame)(renderLoopRef.current);
         }
     }, []);
 
     // Ensure loop starts when component mounts or stream restarts
     useEffect(() => {
-        if (!rafRef.current && !streamDone && renderLoopRef.current) {
-            rafRef.current = requestAnimationFrame(renderLoopRef.current);
+        if (!updateTaskRef.current && !streamDone && renderLoopRef.current) {
+            // @ts-ignore
+            updateTaskRef.current = (window.requestIdleCallback || window.requestAnimationFrame)(renderLoopRef.current);
         }
         return () => {
-            if (rafRef.current) {
-                cancelAnimationFrame(rafRef.current);
-                rafRef.current = null;
+            if (updateTaskRef.current !== null) {
+                // @ts-ignore
+                (window.cancelIdleCallback || window.cancelAnimationFrame)(updateTaskRef.current);
+                updateTaskRef.current = null;
             }
         };
     }, [streamDone]);

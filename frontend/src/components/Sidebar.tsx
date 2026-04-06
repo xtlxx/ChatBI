@@ -189,6 +189,8 @@ export function Sidebar({ view, onViewChange }: SidebarProps) {
         <button
           ref={settingsButtonRef}
           onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+          aria-expanded={isSettingsOpen}
+          aria-controls="settings-popover"
           className={`flex items-center gap-3 w-full px-3 py-2 text-sm font-medium rounded-lg transition-colors ${isSettingsOpen ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
         >
           <Settings size={18} className="shrink-0" />

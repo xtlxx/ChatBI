@@ -47,6 +47,10 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
   const mergedOption = useMemo(() => {
     if (!validatedOption) return null;
     return {
+      aria: {
+        enabled: true,
+        decal: { show: true }
+      },
       backgroundColor: 'transparent', // 保持透明以适应外层容器的圆角和背景
       animation: true,
       animationDuration: 1000,
@@ -145,7 +149,7 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
   const chartContent = (
     <div 
       ref={containerRef}
-      className={`relative group w-full h-full ${isFullscreen ? 'bg-background p-8' : ''}`}
+      className={`relative w-full group ${isFullscreen ? 'bg-background p-8 fixed inset-0 z-[100] h-screen' : 'h-full flex-1 min-h-[300px]'}`}
     >
       {/* 图表工具栏（仅在非全屏下显示） */}
       <div className="absolute top-2 right-2 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -201,7 +205,7 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
   );
 
   return (
-    <div className="w-full h-full" role="img" aria-label={t('chart.ariaLabel')}>
+    <div className="w-full h-full flex flex-col" role="img" aria-label={t('chart.ariaLabel')}>
       {chartContent}
     </div>
   );

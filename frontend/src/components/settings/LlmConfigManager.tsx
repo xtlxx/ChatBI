@@ -236,14 +236,14 @@ export function LlmConfigManager({ configs = [], selectedId, onSelect, onUpdate 
       >
         <div className="space-y-6">
             {/* List */}
-            <div className="space-y-2 max-h-40 overflow-y-auto border rounded-md p-2 bg-gray-50">
+            <div className="space-y-2 max-h-40 overflow-y-auto border border-border rounded-md p-2 bg-muted/30 dark:bg-zinc-900/30">
                 {loading && modalConfigs.length === 0 ? (
-                    <div className="flex justify-center p-4"><Loader2 className="animate-spin text-gray-400" /></div>
+                    <div className="flex justify-center p-4"><Loader2 className="animate-spin text-muted-foreground" /></div>
                 ) : modalConfigs.length === 0 ? (
-                    <div className="text-center text-sm text-gray-500 py-4">{t('settings.llm.noConfigurations')}</div>
+                    <div className="text-center text-sm text-muted-foreground py-4">{t('settings.llm.noConfigurations')}</div>
                 ) : (
                     modalConfigs.map(cfg => (
-                        <div key={cfg.id} className="flex items-center justify-between p-2 bg-white border rounded-md shadow-sm">
+                        <div key={cfg.id} className="flex items-center justify-between p-2 bg-background border border-border rounded-md shadow-sm">
                             <div className="flex items-center gap-2 overflow-hidden">
                                 <Cpu size={16} className="text-gray-400 flex-shrink-0" />
                                 <div className="truncate">

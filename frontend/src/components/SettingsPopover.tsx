@@ -20,7 +20,7 @@ export function SettingsPopover({ isOpen, onClose, triggerRef, children, title }
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Element;
       
-      // Check if click is inside a dialog (e.g. Radix UI Modal) or other portal content
+      // 检查点击是否位于对话框（如 Radix UI 模态框）或其他 portal 内容内
       if (target.closest('[role="dialog"]') || target.closest('[data-radix-popper-content-wrapper]')) {
         return;
       }
@@ -41,24 +41,24 @@ export function SettingsPopover({ isOpen, onClose, triggerRef, children, title }
       const rect = triggerRef.current.getBoundingClientRect();
       const viewportHeight = window.innerHeight;
       
-      // Default: Show to the right of the sidebar
+      // sidebar 默认：在侧边栏右侧显示弹出框
       const left = rect.right + 12; // 12px gap
       
-      // Try to align bottom with trigger bottom
-      // But ensure it doesn't go off top
+      // bottom 尝试将弹出框底部对齐到触发元素底部
+      // 但确保它不会超出顶部
       const popoverHeight = 400; // Estimated height
       
       const bottom = viewportHeight - rect.bottom;
       
-      // If aligning bottom pushes top off screen, align top instead
+      // off 如果对齐底部会导致顶部超出屏幕，对齐顶部而不是底部
       if (viewportHeight - bottom - popoverHeight < 0) {
-          // Align top with trigger top
+          // top 尝试将弹出框顶部对齐到触发元素顶部
           setPosition({
               left,
               top: rect.top,
           });
       } else {
-          // Align bottom with trigger bottom
+          // bottom 尝试将弹出框底部对齐到触发元素底部
           setPosition({
               left,
               bottom,
@@ -104,6 +104,7 @@ export function SettingsPopover({ isOpen, onClose, triggerRef, children, title }
       )}
       <div 
         ref={popoverRef}
+        id="settings-popover"
         style={isMaximized ? maximizedStyle : normalStyle}
         className={`${isMaximized ? 'w-auto' : 'w-[320px]'} bg-background border border-border rounded-xl shadow-xl flex flex-col animate-in fade-in zoom-in-95 ${!isMaximized ? 'slide-in-from-left-2' : ''} duration-200 overflow-hidden transition-all`}
       >

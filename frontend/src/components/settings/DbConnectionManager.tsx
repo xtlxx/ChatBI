@@ -270,14 +270,14 @@ export function DbConnectionManager({ connections = [], selectedId, onSelect, on
                         </button>
                     </div>
 
-                    <div className="space-y-2 max-h-[60vh] overflow-y-auto border rounded-md p-2 bg-gray-50">
+                    <div className="space-y-2 max-h-[60vh] overflow-y-auto border border-border rounded-md p-2 bg-muted/30 dark:bg-zinc-900/30">
                         {loading && modalConnections.length === 0 ? (
-                            <div className="flex justify-center p-4"><Loader2 className="animate-spin text-gray-400" /></div>
+                            <div className="flex justify-center p-4"><Loader2 className="animate-spin text-muted-foreground" /></div>
                         ) : modalConnections.length === 0 ? (
-                            <div className="text-center text-sm text-gray-500 py-4">{t('settings.connections.noConnections')}</div>
+                            <div className="text-center text-sm text-muted-foreground py-4">{t('settings.connections.noConnections')}</div>
                         ) : (
                             modalConnections.map(conn => (
-                                <div key={conn.id} className="flex items-center justify-between p-3 bg-white border rounded-md shadow-sm hover:shadow-md transition-shadow relative group">
+                                <div key={conn.id} className="flex items-center justify-between p-3 bg-background border border-border rounded-md shadow-sm hover:shadow-md transition-shadow relative group">
                                     <div className="flex items-center gap-3 overflow-hidden flex-1 min-w-0 pr-2">
                                         <div className="p-2 bg-blue-50 rounded-full flex-shrink-0">
                                             <Database size={16} className="text-blue-600" />

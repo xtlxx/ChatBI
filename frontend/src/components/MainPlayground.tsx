@@ -487,8 +487,9 @@ export function MainPlayground() {
                     <button
                         onClick={onToggleLeftSidebar}
                         className="p-2 hover:bg-muted rounded-full text-muted-foreground transition-colors"
-                        title={isLeftSidebarOpen ? "Close Sidebar" : "Open Sidebar"}
+                        title={isLeftSidebarOpen ? t('sidebar.close') : t('sidebar.open')}
                         aria-label={isLeftSidebarOpen ? t('sidebar.close') : t('sidebar.open')}
+                        aria-expanded={isLeftSidebarOpen}
                     >
                         {isLeftSidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
                     </button>
@@ -588,7 +589,8 @@ export function MainPlayground() {
                             <>
                                 <button 
                                     className={`p-2 rounded-full transition-all ${isListening ? 'text-red-500 bg-red-100 dark:bg-red-900/30 animate-pulse' : 'text-muted-foreground hover:text-primary hover:bg-background'}`}
-                                    aria-label="Voice input"
+                                    aria-label={t('chat.voiceInput', 'Voice input')}
+                                    title={t('chat.voiceInput', 'Voice input')}
                                     onClick={toggleListening}
                                 >
                                     <Mic size={20} />
@@ -600,7 +602,8 @@ export function MainPlayground() {
                             <button
                                 onClick={handleSendMessage}
                                 disabled={isStreaming}
-                                aria-label="Send message"
+                                aria-label={t('chat.sendMessage', 'Send message')}
+                                title={t('chat.sendMessage', 'Send message')}
                                 className="p-2 bg-primary text-primary-foreground rounded-full shadow-md hover:shadow-lg transition-all hover:scale-105 active:scale-95 flex items-center justify-center w-10 h-10"
                             >
                                 {isStreaming ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} className="ml-0.5" />}
@@ -608,6 +611,8 @@ export function MainPlayground() {
                         ) : (
                             <button
                                 disabled
+                                aria-label={t('chat.sendMessage', 'Send message')}
+                                title={t('chat.sendMessage', 'Send message')}
                                 className="p-2 text-muted-foreground/60 cursor-not-allowed rounded-full w-10 h-10 flex items-center justify-center"
                             >
                                 <Send size={18} className="ml-0.5" />

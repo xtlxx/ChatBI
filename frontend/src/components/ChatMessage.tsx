@@ -1,6 +1,6 @@
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo, useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, CheckCircle2, Sparkles, ChevronDown, ChevronRight, RefreshCw, Database, Table, Copy, Check } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Sparkles, ChevronDown, ChevronRight, RefreshCw, Database, Table, Copy, Check, Loader2 } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -14,13 +14,24 @@ import { vscDarkPlus, vs } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useThemeStore } from '@/store/theme-store';
 
 import { ThinkingState } from './ThinkingState';
-import { ChartRenderer } from '@/components/ChartRenderer';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { SqlBlock } from '@/components/ui/SqlBlock';
 import { MermaidDiagram } from '@/components/ui/MermaidDiagram';
 import { cleanMarkdownContent } from '@/lib/utils';
 import type { Message } from '@/types/chat';
 import { useSmoothStream } from '@/hooks/useSmoothStream';
+
+const ChartRenderer = lazy(() => import('@/components/ChartRenderer').then(module => ({ default: module.ChartRenderer })));
+
+const MemoizedMarkdown = memo(({ content, components }: { content: string, components: Components }) => (
+    <ReactMarkdown 
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={components}
+    >
+        {content}
+    </ReactMarkdown>
+), (prevProps, nextProps) => prevProps.content === nextProps.content);
 
 interface ChatMessageProps {
     message: Message;
@@ -318,13 +329,10 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                                             {t('chat.status.skip')} · {Math.round(progress * 100)}%
                                         </button>
                                     )}
-                                    <ReactMarkdown 
-                                        remarkPlugins={[remarkGfm, remarkMath]}
-                                        rehypePlugins={[rehypeKatex]}
+                                    <MemoizedMarkdown 
                                         components={markdownComponents}
-                                    >
-                                        {finalDisplayedText}
-                                    </ReactMarkdown>
+                                        content={finalDisplayedText}
+                                    />
                                 </div>
                             )}
 
@@ -339,9 +347,18 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                                             {t('chat.status.visualization')}
                                         </div>
                                     </div>
-                                    <div className="p-4">
+                                    <div className="p-2 sm:p-4 bg-white dark:bg-[#1a1a1a] w-full">
                                         <ErrorBoundary fallback={<div className="p-4 text-xs text-muted-foreground text-center">图表渲染失败，请检查数据格式。</div>}>
-                                            <ChartRenderer option={msg.chartOption} />
+                                            <Suspense fallback={
+                                                <div className="w-full h-[300px] sm:h-[400px] md:h-[450px] flex flex-col items-center justify-center gap-3 text-muted-foreground bg-muted/10 rounded-xl border border-dashed border-border/50">
+                                                    <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+                                                    <span className="text-sm">{t('common.loading')}...</span>
+                                                </div>
+                                            }>
+                                                <div className="w-full h-[300px] sm:h-[400px] md:h-[450px] relative flex-shrink-0">
+                                                    <ChartRenderer option={msg.chartOption} height="100%" />
+                                                </div>
+                                            </Suspense>
                                         </ErrorBoundary>
                                     </div>
                                 </div>
