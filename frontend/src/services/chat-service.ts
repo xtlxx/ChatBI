@@ -62,6 +62,7 @@ export const chatService = {
       console.log('[ChatService] 开始流请求: /api/query/stream');
       
       let hasReceivedData = false;
+      let lastProcessedId = '';
       
       // 确保URL中不重复包含 /api
       let url = '/api/query/stream';
@@ -73,7 +74,8 @@ export const chatService = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${token}`,
+          ...(lastProcessedId ? { 'Last-Event-ID': lastProcessedId } : {})
         },
         body: JSON.stringify(data),
         signal,
@@ -91,7 +93,7 @@ export const chatService = {
           }
           throw new Error(`服务器错误: ${response.status} ${response.statusText}`);
         },
-        onmessage(msg: { event: string; data: string }) {
+        onmessage(msg: { id?: string; event: string; data: string }) {
           try {
             // 处理不同的事件类型
             if (msg.event === 'ping') {
@@ -106,6 +108,15 @@ export const chatService = {
             // 忽略非数据消息或空消息
             if (!msg.data || msg.data === '[DONE]') {
               return;
+            }
+
+            // 防乱序：如果存在 id 且小于最后处理的 id，则跳过
+            if (msg.id) {
+               if (lastProcessedId && msg.id < lastProcessedId) {
+                   console.warn(`[ChatService] 丢弃乱序或重复消息: ${msg.id}`);
+                   return;
+               }
+               lastProcessedId = msg.id;
             }
 
             hasReceivedData = true;
@@ -124,18 +135,18 @@ export const chatService = {
         },
         onerror(err: unknown) {
           if (signal?.aborted) {
-            return; // 用户取消，不处理错误信号
+            throw err; // 抛出错误以终止 fetchEventSource 的内部重试循环
           }
-          console.error("流取错误:", err);
+          console.error("流读取错误:", err);
           if (hasReceivedData) {
              onChunk({
                  type: 'error',
                  content: '\n\n*(网络连接已中断，以上为部分生成内容)*',
                  done: true
              });
-             return; // 不抛出错误，停止重试尝试
+             throw err; // 抛出错误以终止，不进行重试尝试
           }
-          throw err; // 触发 onError处理
+          return Math.min(1000 * Math.pow(2, 3), 15000); // 出现错误时，最多重试并以指数退避策略延迟，上限 15s
         }
       });
       

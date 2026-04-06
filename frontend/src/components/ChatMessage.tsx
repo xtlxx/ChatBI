@@ -17,6 +17,7 @@ import { ThinkingState } from './ThinkingState';
 import { ChartRenderer } from '@/components/ChartRenderer';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { SqlBlock } from '@/components/ui/SqlBlock';
+import { MermaidDiagram } from '@/components/ui/MermaidDiagram';
 import { cleanMarkdownContent } from '@/lib/utils';
 import type { Message } from '@/types/chat';
 import { useSmoothStream } from '@/hooks/useSmoothStream';
@@ -110,6 +111,12 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
             
             if (!isInline && match) {
                 const language = match[1].toLowerCase();
+                const codeString = String(children).replace(/\n$/, '');
+
+                if (language === 'mermaid') {
+                    return <MermaidDiagram chart={codeString} />;
+                }
+
                 return (
                     <div className="my-3 border border-border rounded-xl overflow-hidden bg-card shadow-sm">
                         <div className="bg-muted/50 px-3 py-2 text-[10px] font-medium text-muted-foreground border-b border-border flex items-center gap-2">
@@ -120,7 +127,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                         <SyntaxHighlighter
                             {...(rest as any)}
                             PreTag="div"
-                            children={String(children).replace(/\n$/, '')}
+                            children={codeString}
                             language={language}
                             style={isDark ? vscDarkPlus : vs}
                             customStyle={{ margin: 0, padding: '0.75rem', fontSize: '0.75rem', backgroundColor: 'transparent' }}

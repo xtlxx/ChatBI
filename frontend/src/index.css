@@ -156,7 +156,7 @@
 
     /* Muted: #444746 */
     --muted: 210 3% 27%;
-    --muted-foreground: 0 0% 77%;
+    --muted-foreground: 0 0% 85%; /* 提升对比度，使其更易读 */
 
     /* Accent: #444746 */
     --accent: 210 3% 20%;
@@ -179,6 +179,7 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: "Google Sans", "Helvetica Neue", sans-serif;
+    font-weight: 400; /* 全局统一字重 */
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
