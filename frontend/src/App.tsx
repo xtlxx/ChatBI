@@ -23,17 +23,14 @@ function App() {
   }, [navigate]);
 
   return (
-    <div 
-      className={`grid h-screen bg-background overflow-hidden relative transition-[grid-template-columns] duration-300 ease-in-out ${
-        isLeftSidebarOpen ? 'grid-cols-1 md:grid-cols-[20rem_1fr]' : 'grid-cols-1 md:grid-cols-[0px_1fr]'
-      }`}
-    >
+    <div className="flex h-screen bg-background overflow-hidden relative">
       {/* 左侧边栏 */}
       <div 
         className={`
-          border-r border-border bg-background z-20 overflow-hidden
-          ${isLeftSidebarOpen ? "translate-x-0 w-80 md:w-full" : "-translate-x-full md:translate-x-0 w-0 md:w-full"}
-          absolute md:relative h-full transition-transform duration-300 ease-in-out md:transition-none
+          flex-shrink-0 border-r border-border bg-background z-20 overflow-hidden
+          transition-[width,transform] duration-300 ease-in-out
+          absolute md:relative h-full
+          ${isLeftSidebarOpen ? "w-80 translate-x-0" : "w-0 -translate-x-full md:translate-x-0"}
         `}
       >
         <div className="w-80 h-full">
@@ -42,7 +39,7 @@ function App() {
       </div>
 
       {/* 主内容区域 */}
-      <div className="flex flex-col min-w-0 h-full relative z-10">
+      <div className="flex-1 flex flex-col min-w-0 h-full relative z-10">
         <Outlet context={{ 
             isLeftSidebarOpen, 
             setIsLeftSidebarOpen,
