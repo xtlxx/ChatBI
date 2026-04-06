@@ -12,10 +12,12 @@ vi.mock('react-i18next', () => ({
 describe('SqlBlock Component', () => {
   it('renders SQL query text', () => {
     const mockSql = 'SELECT * FROM users;';
-    render(<SqlBlock sql={mockSql} />);
+    const { container } = render(<SqlBlock sql={mockSql} />);
     
-    // Check if the SQL text is rendered
-    expect(screen.getByText(/SELECT \* FROM users;/i)).toBeInTheDocument();
+    // Check if the SQL text is rendered (ignoring HTML tags due to syntax highlighting)
+    const preElement = container.querySelector('pre');
+    expect(preElement).toBeInTheDocument();
+    expect(preElement?.textContent).toBe('SELECT * FROM users;');
   });
 
   it('renders title from i18n', () => {
