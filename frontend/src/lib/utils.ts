@@ -36,5 +36,15 @@ export function cleanMarkdownContent(content: string | null): string {
   // 4. 移除可能残留的顶层 JSON 包装
   cleaned = cleaned.replace(/^\s*\{\s*"content"\s*:\s*"([\s\S]*?)"\s*\}\s*$/g, '$1');
 
+  // 5. 移除特殊占位符和标签
+  cleaned = cleaned.replace(/\[\/?(SQL|Thinking|Chart)\]/g, '');
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
+
+  // 6. 补全未闭合的代码块 (非常关键：防止代码块未闭合导致的整个页面高度猛跳)
+  const codeBlockCount = (cleaned.match(/```/g) || []).length;
+  if (codeBlockCount % 2 !== 0) {
+      cleaned += '\n```';
+  }
+
   return cleaned.trim();
 }

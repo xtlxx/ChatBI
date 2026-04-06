@@ -38,6 +38,7 @@ export function MainPlayground() {
     const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const shouldAutoScroll = useRef(true);
 
@@ -217,10 +218,11 @@ export function MainPlayground() {
     };
 
     const scrollToBottom = useCallback((instant = false) => {
-        if (messagesEndRef.current) {
-            messagesEndRef.current.scrollIntoView({
-                behavior: instant ? "auto" : "smooth",
-                block: "end"
+        if (scrollContainerRef.current) {
+            const container = scrollContainerRef.current;
+            container.scrollTo({
+                top: container.scrollHeight,
+                behavior: instant ? "auto" : "smooth"
             });
         }
     }, []);
@@ -236,13 +238,12 @@ export function MainPlayground() {
     // Scroll on streaming updates
     useEffect(() => {
         if (isStreaming && shouldAutoScroll.current) {
-            requestAnimationFrame(() => {
-                if (messagesEndRef.current) {
-                    messagesEndRef.current.scrollIntoView({ behavior: "auto", block: "end" });
-                }
+            const frame = requestAnimationFrame(() => {
+                scrollToBottom(true);
             });
+            return () => cancelAnimationFrame(frame);
         }
-    }, [messages, isStreaming]);
+    }, [messages, isStreaming, scrollToBottom]);
 
     // 清理副作用
     useEffect(() => {
@@ -517,6 +518,7 @@ export function MainPlayground() {
             </div>
 
             <div
+                ref={scrollContainerRef}
                 className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8 pb-40 scroll-smooth"
                 onScroll={handleScroll}
             >

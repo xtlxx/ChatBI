@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef, Suspense, lazy } from 'react';
+import { memo, useState, useEffect, useRef, Suspense, lazy, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, CheckCircle2, Sparkles, ChevronDown, ChevronRight, RefreshCw, Database, Table, Copy, Check, Loader2 } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
@@ -138,7 +138,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
     };
 
     // 自定义 Markdown 组件，特别是代码块的语法高亮
-    const markdownComponents: Components = {
+    const markdownComponents: Components = useMemo(() => ({
         code(props) {
             const { children, className, node, ...rest } = props;
             const match = /language-(\w+)/.exec(className || '');
@@ -148,49 +148,67 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                 const language = match[1].toLowerCase();
                 const codeString = String(children).replace(/\n$/, '');
 
+                if (language === 'sql') {
+                    return <SqlBlock sql={codeString} />;
+                }
+                
                 if (language === 'mermaid') {
                     return <MermaidDiagram chart={codeString} />;
                 }
 
                 return (
-                    <div className="my-3 border border-border rounded-xl overflow-hidden bg-card shadow-sm">
-                        <div className="bg-muted/50 px-3 py-2 text-[10px] font-medium text-muted-foreground border-b border-border flex items-center gap-2">
-                            <span className="text-blue-500">{language === 'sql' ? 'SQL' : language.toUpperCase()}</span>
-                            {language === 'sql' && <span className="opacity-50">{t('sqlBlock.statement')}</span>}
+                    <div className="relative group rounded-md overflow-hidden bg-[#1e1e1e] border border-zinc-800/50 mt-3 mb-4">
+                        <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900 border-b border-zinc-800">
+                            <span className="text-xs font-mono text-zinc-400 select-none">
+                                {language}
+                            </span>
+                            <button
+                                onClick={() => {
+                                    navigator.clipboard.writeText(codeString);
+                                }}
+                                className="p-1.5 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+                                aria-label="Copy code"
+                            >
+                                <Copy size={14} />
+                            </button>
                         </div>
-                        {/* 使用 SyntaxHighlighter 替代危险的 dangerouslySetInnerHTML */}
-                        <SyntaxHighlighter
-                            {...(rest as any)}
-                            PreTag="div"
-                            children={codeString}
-                            language={language}
-                            style={isDark ? vscDarkPlus : vs}
-                            customStyle={{ margin: 0, padding: '0.75rem', fontSize: '0.75rem', backgroundColor: 'transparent' }}
-                        />
+                        <div className="text-[13px] leading-relaxed [&>pre]:!m-0 [&>pre]:!p-4 [&>pre]:!bg-transparent">
+                            <SyntaxHighlighter
+                                {...(rest as any)}
+                                PreTag="div"
+                                children={codeString}
+                                language={language}
+                                style={isDark ? vscDarkPlus : vs}
+                                customStyle={{
+                                    margin: 0,
+                                    padding: '1rem',
+                                    background: 'transparent',
+                                    fontSize: '13px',
+                                    lineHeight: '1.5'
+                                }}
+                                wrapLongLines={false}
+                            />
+                        </div>
                     </div>
                 );
             }
-            
-            // 行内代码 (如果既不是 match 也没有 language class)
             return (
-                <code className="px-1.5 py-0.5 bg-muted/50 rounded text-xs font-mono text-pink-600 dark:text-pink-400" {...rest}>
+                <code {...rest} className={`bg-muted/50 rounded-md px-1.5 py-0.5 text-sm font-mono text-foreground border border-border/50 ${className || ''}`}>
                     {children}
                 </code>
             );
         },
-        
-        // 表格，增加 overflow-x-auto 包装容器
         table(props) {
             const { children, className, node, ...rest } = props;
             return (
-                <div className="w-full overflow-x-auto my-4 rounded-lg border border-border bg-card shadow-sm">
-                    <table className="w-full text-sm text-left m-0 border-0" {...(rest as any)}>
+                <div className="w-full overflow-x-auto my-4 rounded-lg border border-border">
+                    <table {...rest} className={`w-full text-sm text-left border-collapse ${className || ''}`}>
                         {children}
                     </table>
                 </div>
             );
         }
-    };
+    }), [isDark]);
 
     return (
         <div className={`flex gap-3 md:gap-4 group ${containerClass || ''} ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>

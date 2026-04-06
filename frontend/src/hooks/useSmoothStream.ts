@@ -52,8 +52,9 @@ export function useSmoothStream({ onUpdate, streamDone, minDelay = 10 }: UseSmoo
         }
 
         // 3. 动态速度控制
-        // 改为恒定且较小的消费量，确保字是一个个均匀出来的
-        const count = Math.max(2, Math.floor(queueRef.current.length / 10));
+        // 限制每次最大吐字数量，避免大块文字突然糊在屏幕上
+        // 改为恒定且较小的消费量，加上上限阈值
+        const count = Math.max(1, Math.min(5, Math.floor(queueRef.current.length / 5)));
         
         // 4. 提取字符
         const charsToRender = queueRef.current.splice(0, count);
