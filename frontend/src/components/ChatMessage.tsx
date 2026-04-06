@@ -208,7 +208,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                 </div>
             );
         }
-    }), [isDark]);
+    }), [isDark, t]);
 
     return (
         <div className={`flex gap-3 md:gap-4 group ${containerClass || ''} ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>

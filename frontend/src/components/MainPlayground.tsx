@@ -519,7 +519,7 @@ export function MainPlayground() {
 
             <div
                 ref={scrollContainerRef}
-                className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8 pb-40 scroll-smooth"
+                className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8 pb-40"
                 onScroll={handleScroll}
             >
                 {isLoadingHistory ? (
