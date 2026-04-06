@@ -137,10 +137,11 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
             }
             
             // 表格，增加 overflow-x-auto 包装容器
-            table({ children, ...rest }) {
+            table(props) {
+                const { children, className, node, ...rest } = props;
                 return (
                     <div className="w-full overflow-x-auto my-4 rounded-lg border border-border bg-card shadow-sm">
-                        <table className="w-full text-sm text-left m-0 border-0" {...rest}>
+                        <table className="w-full text-sm text-left m-0 border-0" {...(rest as any)}>
                             {children}
                         </table>
                     </div>
