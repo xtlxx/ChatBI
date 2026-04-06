@@ -146,11 +146,11 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                     : 'bg-transparent text-foreground w-full'
                     }`}>
                     {/* === THINKING === */}
-                    {(msg.thinking || msg.thinkingStatus) && (
+                    {msg.role === 'ai' && (msg.thinking || msg.sqlThought) && (
                         <div className="mb-4">
                             <ThinkingState
                                 status={msg.thinkingStatus}
-content={(msg.thinking || '') + (msg.sqlThought ? '\n\n**技术思考 (SQL Strategy):**\n' + msg.sqlThought : '')}
+                                content={msg.thinking || (msg.sqlThought ? `**技术思考 (SQL Strategy):**\n${msg.sqlThought}` : '')}
                                 currentStep={msg.status}
                             />
                         </div>

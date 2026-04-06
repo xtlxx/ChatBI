@@ -115,15 +115,14 @@ def validate_and_format_sql(sql: str, dialect: str = "postgres") -> str:
         else:
             # 可选：如果用户写的 LIMIT 超过阈值，也可以在此强制覆盖
             pass
-
-    # 5. 软删除策略注入 (此逻辑已被转移到 Prompt 层面，为了安全这里直接返回原 SQL)
-    # 因为我们在 prompts.py 中已经用自然语言强制要求 LLM 加上 FILTER_RULES
-    # 并且 FILTER_RULES 的值现在是完整的 SQL 条件字符串（如 "is_deleted = 0 AND enable = 1"）
-    # 用 AST 强行注入这种复杂条件很容易导致解析失败或重复注入
-    # 所以这里我们仅保留格式化功能
+            
+    # 移除可能由用户或大模型生成的末尾分号，防止执行时出现语法错误
+    # sqlglot 会自动处理结尾，但明确清理更安全
+    formatted_sql = expression.sql(dialect=dialect)
+    if formatted_sql.strip().endswith(';'):
+        formatted_sql = formatted_sql.strip()[:-1]
     
-    # 返回重新生成的 SQL
-    return expression.sql(dialect=dialect)
+    return formatted_sql
 
 
 def load_lineage_metadata() -> dict[str, Any]:
@@ -211,10 +210,6 @@ class DatabaseTools:
             except ValueError as ve:
                 # 捕获安全校验或解析错误，直接返回错误 JSON
                 return json.dumps({"error": str(ve), "query": query}, ensure_ascii=False)
-
-            # 1.5 方言适配 (Transpilation) - 如果 adapter 有额外的处理
-            # validate_and_format_sql 已经输出了对应 dialect 的 SQL，这里可能只是保险
-            final_query = self.adapter.transpile_sql(final_query)
             
             self.logger.info("sql_secured_and_formatted", final_query=final_query[:200])
 

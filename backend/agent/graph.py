@@ -767,8 +767,9 @@ class ChatBIAgent:
       async for event in self.graph.astream_events(initial_inputs, config, version="v2"):
         kind = event["event"]
         node_name = event.get("metadata", {}).get("langgraph_node")
+        event_name = event.get("name") # 获取事件名称
 
-        self.logger.info("graph_event", kind=kind, node=node_name)
+        self.logger.info("graph_event", kind=kind, node=node_name, name=event_name)
 
         if not node_name:
           continue
@@ -824,13 +825,13 @@ class ChatBIAgent:
 
         # 2. SQL 生成节点
         elif node_name == "generate_sql":
-          if kind == "on_chain_start":
+          if kind == "on_chain_start" and event_name == "generate_sql":
             yield {
               "type": "status",
               "content": "开始分析数据并生成 SQL...",
               "done": False
             }
-          elif kind == "on_chain_end":
+          elif kind == "on_chain_end" and event_name == "generate_sql":
             node_data = event["data"]["output"]
             if isinstance(node_data, dict) and "sql_attempt" in node_data:
               sql_attempt = node_data.get("sql_attempt")
@@ -844,7 +845,11 @@ class ChatBIAgent:
                   "done": False
                 }
                 if sql_thought:
-                  prefix = "\n\n**📊 数据策略分析：**\n" if accumulated_thinking else "**📊 数据策略分析：**\n"
+                  if "**📊 数据策略分析：**" in accumulated_thinking:
+                    prefix = "\n\n**🔄 修正策略分析：**\n"
+                  else:
+                    prefix = "\n\n**📊 数据策略分析：**\n" if accumulated_thinking else "**📊 数据策略分析：**\n"
+                  
                   accumulated_thinking += prefix + sql_thought
                   yield {
                     "type": "thinking",
@@ -947,9 +952,26 @@ class ChatBIAgent:
             }
 
       if not has_streamed_final_answer:
+        # 如果重试次数耗尽，从 state 中提取最后的错误信息并展示
+        last_err = "未知错误"
+        
+        # 尝试从状态图中获取最后的状态
+        try:
+          current_state = self.graph.get_state(config).values
+          if current_state and current_state.get("last_error"):
+            last_err = current_state.get("last_error")
+          elif current_state and current_state.get("messages"):
+             # 从 messages 中提取最后一个 HumanMessage（通常是错误反馈）
+             for msg in reversed(current_state["messages"]):
+                if isinstance(msg, HumanMessage) and ("失败" in msg.content or "异常" in msg.content):
+                   last_err = msg.content
+                   break
+        except Exception:
+          pass
+
         yield {
           "type": "error",
-          "content": "未能生成有效回答 (可能由于重试次数过多或验证失败)",
+          "content": f"未能生成有效回答：重试次数已耗尽。\n\n**最后一次错误原因**：\n{last_err}",
           "done": True
         }
 

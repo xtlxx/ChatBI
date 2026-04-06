@@ -126,6 +126,20 @@ CORE_TABLES: Dict[str, Dict[str, Any]] = {
         'columns': ['seq', 'bill_no', 'customer_id', 'customer_name', 'transaction_amount《单位:元，成交金额》',
                     'receivable_amount《单位:元，应收金额》', 'status', 'del_flag', 'is_available'],
         'relations': ['customer_id -> bas_custom.id'],
+    },
+
+    # === 质量定检分析 === 
+    'shoe_qc_analysis': { 
+        'pk': 'id', 
+        'columns': [ 
+            'id', 
+            'defect_reason《业务含义:定检原因，如脱胶、线头等》', 
+            'pair_count《单位:双，异常双数》', 
+            'inspection_method《业务含义:巡检处理方法》', 
+            'improvement_method《业务含义:现场改善方法》', 
+            'is_confirmed' 
+        ], 
+        'relations': [], 
     }
 }
 
@@ -143,6 +157,7 @@ FILTER_RULES = {
     'po_': "1 = 1", # po_defective_product 没有通用软删字段
     't_': "is_deleted = 0", # t_standard_cost_budget
     'anta_': "is_delete = 0", # anta_bom_detail_info
+    'shoe_': "1 = 1",  # ✅ 以 shoe_ 开头的表不需要软删除过滤
     'store': "is_deleted = '0' AND enable = '1'",
     'material_inventory': "1 = 1",
 }
@@ -159,8 +174,9 @@ def generate_schema_info(current_time: str = None) -> str:
         "🚨 严格规则（必须遵守，否则 SQL 会失败）：",
         "1. 所有非核心业务字段（审计字段、创建/更新人、备注等）已被物理移除，你只看到业务必须的核心字段，禁止臆造任何其他字段。",
         "2. 优先使用名称/中文状态字段进行条件过滤，而不是使用 code 或 seq 字段猜测。",
-        "3. 带有《单位:xxx》注释的字段，请严格遵循其单位含义进行统计，不要脑补。",
+        "3. 带有 (注释:xxx) 的字段说明，请严格遵循其含义进行统计，且在生成 SQL 时不要将注释部分写入列名中。",
         "4. JOIN 时只能使用 relations 中定义的外键关联。",
+        "5. 聚合查询（如 GROUP BY）时，如果存在实体主键/关联键（如 custom_seq, art_seq 等），请优先使用键和名称一起分组（例如 GROUP BY custom_seq, custom_name），防止同名数据混淆。",
         "",
         "🗑️ 数据清洗规则（软删除与可用性强制执行！）",
         "本系统全部采用软删除逻辑。任何 SELECT 查询涉及的每一张表（包括 JOIN 的表）都必须加上正确的过滤条件，否则视为严重错误！"
@@ -180,7 +196,17 @@ def generate_schema_info(current_time: str = None) -> str:
     
     for table_name, info in sorted(CORE_TABLES.items()):
         lines.append(f"- 表 `{table_name}` (主键: {info['pk']})")
-        lines.append(f"  字段: {', '.join(info['columns'])}")
+        
+        formatted_columns = []
+        for col in info['columns']:
+            if "《" in col and "》" in col:
+                col_name = col.split("《")[0]
+                comment = col.split("《")[1].split("》")[0]
+                formatted_columns.append(f"{col_name} (注释: {comment})")
+            else:
+                formatted_columns.append(col)
+                
+        lines.append(f"  字段: {', '.join(formatted_columns)}")
         if info.get('relations'):
             lines.append(f"  关联关系: {', '.join(info['relations'])}")
         lines.append("")
@@ -333,42 +359,57 @@ Schema Context（必须严格遵守）：
 # 最终报告生成 (Response Generation)
 # ============================================================
 
-RESPONSE_GEN_SYSTEM = """你是一位资深业务分析专家，正在向公司高管汇报。请根据用户问题和 SQL 执行结果，生成一份格式精美、观点鲜明、具有决策价值的 Markdown 格式分析报告。
+RESPONSE_GEN_SYSTEM = """你是一位资深业务分析专家，正在向公司高管汇报。请根据用户问题和 SQL 执行结果，生成一份格式精美、层次分明、具有决策价值的 Markdown 格式分析报告。
 当前系统时间：{current_time}
 
-报告排版要求（重要）：
-1. 排版美观：充分利用 Markdown 语法。使用 ## 二级标题分隔板块，关键指标使用 **加粗** 或 > 引用块 突出显示。
-2. 数据可视化：表格必须对齐，数字建议使用千分位分隔符（如 1,234）。
-3. 结构清晰：按照“结论先行 -> 数据支撑 -> 深度洞察 -> 行动建议”的逻辑组织内容。
+## 核心排版与视觉规范（严格遵守）
+1. **层次解构**：必须使用标准的 Markdown 标题（`###` 或 `####`）将大段文字切分为独立模块，绝不允许出现超过 4 行的密集文本块。
+2. **要点分离**：所有并列的观点、数据、建议，**必须**使用项目符号（`-`）或数字编号（`1.`）独立成行呈现。
+3. **视觉聚焦**：
+   - 核心数据指标必须使用 **加粗**。
+   - 关键结论或警告信息使用 `>` 引用块突出。
+4. **留白呼吸感**：在不同的标题和列表之间，必须保留一个空行（`\n\n`）作为视觉缓冲。
 
-输出结构（请严格遵循）：
-## 核心结论 (Executive Summary)
-开门见山，用 1-2 句话总结最核心的业务发现。
-关键指标卡片：使用列表或引用块展示核心数字（如总销量、增长率等），让高管一眼看到重点。
+---
 
-## 数据详情 (Data Evidence)
-使用标准 Markdown 表格展示数据。
-确保列名具有业务含义，数字列右对齐。
-**隐藏技术字段**：在生成表格展示数据时，务必自动剔除 `is_deleted`、`enable`、`del_flag`、`is_available` 等用于软删除与可用性过滤的技术性字段，不要将它们呈现给业务高管。
+## 报告输出结构规范（按此顺序生成）
 
-## 趋势与异常 (Trends & Anomalies)
-分析数据的演变趋势（环比/同比）。
-重点高亮：明确指出异常值（极高/极低）或断崖式变化，并尝试解释可能的原因。
+### 🎯 核心结论 (Executive Summary)
+- 开门见山：用 1-2 句话总结最核心的业务发现，直击痛点或成绩。
+- 核心指标：将最关键的 1-3 个数据提取出来，使用 **加粗** 呈现（如：总异常数 **250双**）。
 
-## 业务建议 (Actionable Insights)
-站在管理层角度，给出 1-3 条具体的行动建议。
-建议应针对上述发现的问题或机会点。
+### 📊 数据详情 (Data Evidence)
+- 简要说明数据来源或概况。
+- 呈现标准 Markdown 表格：
+  - 确保列名转换为易读的业务词汇（而非原始英文字段名）。
+  - 数字类列建议右对齐。
+  - **强制过滤**：在表格中绝对禁止出现 `is_deleted`, `enable`, `del_flag`, `is_available` 等无业务意义的技术性字段。
 
-重要约束：
-- 只能使用提供的 sql_result 数据，禁止任何形式的虚构或补全。
-- 单位必须严格根据字段含义推断，绝对禁止脑补！
-  - total_number / on_hand_qty / shipment_quantity 等数量字段 → 单位是「双」，不是「元」
-  - transaction_amount / receivable_amount 等金额字段 → 单位是「元」
-  - COUNT(*) / COUNT(seq) 等计数结果 → 单位是「笔/条/次」，具体根据上下文判断
-  - 如果字段含义不明确，直接输出原字段名作为表头，不推断单位
-- 保持客观、专业、中立，避免使用过于技术化的术语（如“表”、“字段”），转换为业务术语。
-- 严禁泄露 SQL 语句等底层技术细节。
-- 数据为空时，礼貌说明“当前筛选条件下未发现相关业务记录”，并建议调整分析范围。
+### 🔍 深度洞察 (Trends & Anomalies)
+*（将洞察按主题拆分为带有小标题的子项，例如：）*
+#### 1. [洞察主题 A]（如：高度依赖人工操作规范）
+- **现象描述**：基于数据看到了什么事实。
+- **业务推论**：这说明了什么业务问题。
+
+#### 2. [洞察主题 B]（如：改善维度较为单一）
+- **现象描述**：...
+- **业务推论**：...
+
+### 💡 行动建议 (Actionable Insights)
+*（针对上述洞察，给出具体、可执行的管理建议，每条建议独立成段）*
+1. **[建议方向 A]（如：强化现场作业标准化与培训）**
+   - **具体行动**：建议相关工位立即开展...
+   - **预期收益**：以期达到...效果。
+2. **[建议方向 B]（如：引入防呆机制 Poka-Yoke）**
+   - **具体行动**：建议工艺工程部评估...
+   - **预期收益**：彻底降低人为失误...
+
+---
+
+## 🚫 绝对红线约束
+- 严禁将所有文字揉成一段。
+- 只能使用提供的 `sql_result` 数据，禁止任何形式的数值虚构或脑补。
+- 数据单位必须严格遵循字段含义（如“双”、“元”），不可捏造。
 """
 
 RESPONSE_GEN_PROMPT = ChatPromptTemplate.from_messages([

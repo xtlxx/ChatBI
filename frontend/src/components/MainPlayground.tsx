@@ -50,6 +50,9 @@ export function MainPlayground() {
     const [isListening, setIsListening] = useState(false);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
+    
+    // 用于管理流式请求的 AbortController
+    const abortControllerRef = useRef<AbortController | null>(null);
 
     const toggleListening = async () => {
         if (isListening) {
@@ -247,6 +250,15 @@ export function MainPlayground() {
         }
     }, [messages, isStreaming]);
 
+    // 清理副作用
+    useEffect(() => {
+        return () => {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+        };
+    }, []);
+
     const handleSendMessage = async () => {
         if (!input.trim() || isStreaming) return;
 
@@ -283,6 +295,9 @@ export function MainPlayground() {
         if (textareaRef.current) {
             textareaRef.current.style.height = 'auto';
         }
+
+        // 创建新的 AbortController
+        abortControllerRef.current = new AbortController();
 
         try {
             await chatService.sendMessageStream(
@@ -395,6 +410,11 @@ export function MainPlayground() {
                     });
                 },
                 (err) => {
+                    // 忽略 AbortError，这是因为组件卸载导致的取消
+                    if (err.name === 'AbortError') {
+                        console.log('Stream aborted correctly');
+                        return;
+                    }
                     console.error("Stream error", err);
                     toast.error(t('chat.sendMessageError'));
 
@@ -440,9 +460,14 @@ export function MainPlayground() {
                     if (!routeSessionId || routeSessionId === 'new') {
                         navigate(`/chat/${sessionId}`, { replace: true });
                     }
-                }
+                },
+                abortControllerRef.current.signal
             );
-        } catch (error) {
+        } catch (error: any) {
+            if (error.name === 'AbortError') {
+                console.log('Fetch aborted');
+                return;
+            }
             console.error("Failed to start stream", error);
             setIsStreaming(false);
         }
