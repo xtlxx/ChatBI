@@ -48,18 +48,38 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
     const [showRetryDetails, setShowRetryDetails] = useState(false);
     const [showTypewriter, setShowTypewriter] = useState(true);
 
-    // 始终清理 AI 消息的 content
-    const rawContent = msg.role === 'ai' && msg.content
-        ? cleanMarkdownContent(msg.content)
-        : msg.content;
+    // 修复原因一：不再在拦截入口处直接清洗。因为清洗会导致 `newContent` 频繁发生结构性改变
+    // 我们将其拆分为两步：
+    // 1. `rawContent` 作为平滑流处理的原始数据源，不进行清理
+    const rawContent = msg.content;
 
     const [displayedText, setDisplayedText] = useState('');
+    const [throttledDisplayedText, setThrottledDisplayedText] = useState(''); // 用于实际渲染的节流文本
     const prevContentRef = useRef('');
     
     // 是否需要流式效果：仅对 AI 消息且有内容、非错误时，且不是历史记录时才开启打字机效果
     const shouldStream = showTypewriter && msg.role === 'ai' && !msg.isError && !msg.isHistory;
     // 判断流是否结束：非 loading 即为结束
     const streamDone = !msg.isLoading;
+
+    // 修复原因三：增加 Throttle 层。避免每次 setState 都触发 ReactMarkdown 的全量 AST 重解析
+    const lastRenderTimeRef = useRef<number>(0);
+    const throttleDelay = 50; // 最快 50ms 渲染一次
+
+    useEffect(() => {
+        const now = performance.now();
+        if (now - lastRenderTimeRef.current >= throttleDelay || streamDone) {
+            setThrottledDisplayedText(displayedText);
+            lastRenderTimeRef.current = now;
+        } else {
+            // 兜底：确保最后一点文本一定会被渲染出来
+            const timer = setTimeout(() => {
+                setThrottledDisplayedText(displayedText);
+                lastRenderTimeRef.current = performance.now();
+            }, throttleDelay);
+            return () => clearTimeout(timer);
+        }
+    }, [displayedText, streamDone]);
 
     const { addChunk, reset } = useSmoothStream({
         onUpdate: setDisplayedText,
@@ -94,10 +114,14 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
     useEffect(() => {
         prevContentRef.current = '';
         reset('');
+        setThrottledDisplayedText('');
     }, [msg.id, reset, shouldStream]);
 
     // 不流式时，直接显示内容（使用 derived state）
-    const finalDisplayedText = shouldStream ? displayedText : (rawContent || '');
+    // 修复原因一：在实际渲染的最末端，再去调用 `cleanMarkdownContent`，确保流状态不会被其干扰
+    const finalDisplayedText = shouldStream 
+        ? cleanMarkdownContent(throttledDisplayedText) 
+        : cleanMarkdownContent(rawContent || '');
 
     // 打字完成后允许跳过效果
     const handleSkipTyping = () => {
@@ -184,7 +208,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                     ? 'bg-blue-50 dark:bg-blue-900/20 text-foreground px-6 py-4 rounded-br-sm border border-blue-100 dark:border-blue-800/50'
                     : 'bg-transparent text-foreground w-full'
                     }`}>
-                    {/* === THINKING === */}
+                    {/* === 思考状态 === */}
                     {msg.role === 'ai' && (msg.thinking || msg.sqlThought) && (
                         <div className="mb-4">
                             <ThinkingState
@@ -197,7 +221,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
 
                     {msg.role === 'ai' ? (
                         <>
-                            {/* === LOADING SKELETON === */}
+                            {/* === 加载骨架屏 === */}
                             {msg.isLoading && !msg.content && (!msg.thinking || msg.thinking.trim().length === 0) && (
                                 <div className="space-y-3 animate-pulse">
                                     <div className="flex items-center gap-3">
@@ -211,7 +235,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                                 </div>
                             )}
 
-                            {/* === STATUS PILL === */}
+                            {/* === 状态标签 === */}
                             {msg.isLoading && (msg.content || msg.thinking) && msg.status && !msg.status.includes('Thinking') && (
                                 <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 mb-3 py-1.5 px-3 bg-blue-500/5 rounded-lg border border-blue-200/30 dark:border-blue-800/30 w-fit">
                                     <div className="w-3.5 h-3.5 rounded-full border-[1.5px] border-blue-400 border-t-blue-600 animate-spin" />
@@ -219,7 +243,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                                 </div>
                             )}
 
-                            {/* === RETRY ERRORS (折叠显示) === */}
+                            {/* === 重试错误（折叠显示） === */}
                             {msg.retryErrors && msg.retryErrors.length > 0 && !msg.isError && (
                                 <div className="mb-3">
                                     <button
@@ -245,7 +269,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                                 <SqlBlock sql={msg.sql} />
                             )}
 
-                            {/* === EXECUTION RESULT / RAW DATA PREVIEW === */}
+                            {/* === 执行结果 / 原始数据预览 === */}
                             {msg.executionResult && (
                                 <div className="my-3 flex items-center justify-between px-3 py-2.5 bg-emerald-50/50 dark:bg-emerald-950/20 rounded-lg border border-emerald-200/50 dark:border-emerald-800/30">
                                     <div className="flex items-center gap-2.5 text-xs">
@@ -336,7 +360,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                                 </div>
                             )}
 
-                            {/* === CHART === */}
+                            {/* === 图表 === */}
                             {msg.chartOption && (
                                 <div className="mt-4 w-full overflow-hidden bg-white dark:bg-[#1a1a1a] rounded-xl border border-gray-100 dark:border-zinc-800/50 shadow-sm animate-in fade-in slide-in-from-bottom-2">
                                     <div className="px-4 py-2.5 border-b border-gray-100 dark:border-zinc-800/50 bg-gray-50/50 dark:bg-zinc-900/30 flex items-center justify-between">
@@ -364,7 +388,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                                 </div>
                             )}
 
-                            {/* === ERROR (Structured Display) === */}
+                            {/* === 错误（结构化展示）=== */}
                             {msg.isError && (
                                 <div className="mt-4 p-4 rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/10 dark:border-red-900/50 flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-2">
                                     <div className="flex items-center gap-2 text-red-700 dark:text-red-400 font-medium">
@@ -386,7 +410,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                                 </div>
                             )}
 
-                            {/* === COMPLETION FOOTER === */}
+                            {/* === 完成脚注 === */}
                             {!msg.isLoading && !msg.isError && (
                                 <div className="mt-5 flex items-center justify-between text-[11px] text-muted-foreground/50 select-none">
                                     <div className="h-px flex-1 bg-gradient-to-r from-transparent via-border/50 to-transparent" />

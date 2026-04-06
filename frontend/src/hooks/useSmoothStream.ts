@@ -14,7 +14,7 @@ export function useSmoothStream({ onUpdate, streamDone, minDelay = 10 }: UseSmoo
     const streamDoneRef = useRef(streamDone);
     const onUpdateRef = useRef(onUpdate);
 
-    // Sync refs with props
+    // 将 ref 与 props 同步
     useEffect(() => {
         streamDoneRef.current = streamDone;
     }, [streamDone]);
@@ -23,13 +23,13 @@ export function useSmoothStream({ onUpdate, streamDone, minDelay = 10 }: UseSmoo
         onUpdateRef.current = onUpdate;
     }, [onUpdate]);
 
-    // Main loop function - stable across renders
+    // loop 主循环函数 - 跨渲染保持稳定
     const renderLoopRef = useRef<((deadline?: IdleDeadline) => void) | undefined>(undefined);
 
     const renderLoop = useCallback((deadline?: IdleDeadline) => {
         const now = performance.now();
         
-        // 1. If queue is empty
+        // 1. 如果队列为空
         if (queueRef.current.length === 0) {
             if (streamDoneRef.current) {
                 updateTaskRef.current = null;
@@ -42,7 +42,7 @@ export function useSmoothStream({ onUpdate, streamDone, minDelay = 10 }: UseSmoo
             return;
         }
 
-        // 2. Time control or Idle time check
+        // 2. 时间控制或空闲时间检查，确保最小延迟
         if (now - lastUpdateTimeRef.current < minDelay || (deadline && deadline.timeRemaining() < 1)) {
             if (renderLoopRef.current) {
                 // @ts-ignore
@@ -51,18 +51,19 @@ export function useSmoothStream({ onUpdate, streamDone, minDelay = 10 }: UseSmoo
             return;
         }
 
-        // 3. Dynamic speed control
-        const count = Math.max(15, Math.floor(queueRef.current.length / 3));
+        // 3. 动态速度控制
+        // 改为恒定且较小的消费量，确保字是一个个均匀出来的
+        const count = Math.max(2, Math.floor(queueRef.current.length / 10));
         
-        // 4. Extract chars
+        // 4. 提取字符
         const charsToRender = queueRef.current.splice(0, count);
         displayedTextRef.current += charsToRender.join('');
         lastUpdateTimeRef.current = now;
 
-        // 5. Update UI
+        // 5. 更新 UI
         onUpdateRef.current(displayedTextRef.current);
 
-        // 6. Continue loop
+        // 6. 继续循环，确保流继续运行 
         if (renderLoopRef.current) {
             // @ts-ignore
             updateTaskRef.current = (window.requestIdleCallback || window.requestAnimationFrame)(renderLoopRef.current);
@@ -101,7 +102,7 @@ export function useSmoothStream({ onUpdate, streamDone, minDelay = 10 }: UseSmoo
         }
     }, []);
 
-    // Ensure loop starts when component mounts or stream restarts
+    // 确保循环在组件挂载或流重启时启动
     useEffect(() => {
         if (!updateTaskRef.current && !streamDone && renderLoopRef.current) {
             // @ts-ignore
