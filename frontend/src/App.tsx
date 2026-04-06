@@ -32,7 +32,7 @@ function App() {
       <div 
         className={`
           border-r border-border bg-background z-20 overflow-hidden
-          ${isLeftSidebarOpen ? "translate-x-0 w-80 md:w-full" : "-translate-x-full md:translate-x-0 w-0 md:w-0"}
+          ${isLeftSidebarOpen ? "translate-x-0 w-80 md:w-full" : "-translate-x-full md:translate-x-0 w-0 md:w-full"}
           absolute md:relative h-full transition-transform duration-300 ease-in-out md:transition-none
         `}
       >
