@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, CheckCircle2, Sparkles, ChevronDown, ChevronRight, RefreshCw, Database, Table } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Sparkles, ChevronDown, ChevronRight, RefreshCw, Database, Table, Copy, Check } from 'lucide-react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -90,6 +90,15 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
     // 打字完成后允许跳过效果
     const handleSkipTyping = () => {
         setShowTypewriter(false);
+    };
+
+    const [isCopied, setIsCopied] = useState(false);
+    const handleCopyAll = () => {
+        if (!finalDisplayedText) return;
+        navigator.clipboard.writeText(finalDisplayedText).then(() => {
+            setIsCopied(true);
+            setTimeout(() => setIsCopied(false), 2000);
+        });
     };
 
     // 自定义 Markdown 组件，特别是代码块的语法高亮
@@ -275,7 +284,11 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
 
                             {/* === MAIN CONTENT (Markdown) === */}
                             {finalDisplayedText && (
-                                <div className="prose prose-neutral dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:mt-6 prose-headings:mb-3 prose-p:my-3 prose-p:leading-7 prose-li:my-1 prose-ul:my-3 prose-ol:my-3 prose-table:text-sm prose-th:bg-muted/50 prose-th:px-4 prose-th:py-3 prose-td:px-4 prose-td:py-3 prose-table:border prose-table:rounded-lg prose-table:overflow-hidden prose-img:rounded-lg prose-pre:p-0 prose-pre:bg-transparent">
+                                <div 
+                                    className="prose prose-neutral dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:mt-6 prose-headings:mb-3 prose-p:my-3 prose-p:leading-7 prose-li:my-1 prose-ul:my-3 prose-ol:my-3 prose-table:text-sm prose-th:bg-muted/50 prose-th:px-4 prose-th:py-3 prose-td:px-4 prose-td:py-3 prose-table:border prose-table:rounded-lg prose-table:overflow-hidden prose-img:rounded-lg prose-pre:p-0 prose-pre:bg-transparent relative"
+                                    aria-live={shouldStream ? "polite" : "off"}
+                                    aria-atomic="false"
+                                >
                                     {/* 打字机效果跳过按钮 */}
                                     {isTyping && (
                                         <button
@@ -341,19 +354,32 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                             {!msg.isLoading && !msg.isError && (
                                 <div className="mt-5 flex items-center justify-between text-[11px] text-muted-foreground/50 select-none">
                                     <div className="h-px flex-1 bg-gradient-to-r from-transparent via-border/50 to-transparent" />
-                                    <span className="px-3 flex items-center gap-1">
-                                        {msg.executionTime ? (
-                                            <>
-                                                <CheckCircle2 size={10} />
-                                                {t('chat.status.completed')} · {msg.executionTime}
-                                            </>
-                                        ) : (
-                                            <>
-                                                <CheckCircle2 size={10} />
-                                                {t('chat.status.completed')}
-                                            </>
+                                    <div className="flex items-center gap-3 px-3">
+                                        <span className="flex items-center gap-1">
+                                            {msg.executionTime ? (
+                                                <>
+                                                    <CheckCircle2 size={10} />
+                                                    {t('chat.status.completed')} · {msg.executionTime}
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <CheckCircle2 size={10} />
+                                                    {t('chat.status.completed')}
+                                                </>
+                                            )}
+                                        </span>
+                                        {finalDisplayedText && (
+                                            <button 
+                                                onClick={handleCopyAll}
+                                                className="flex items-center gap-1 hover:text-foreground transition-colors"
+                                                aria-label="Copy message"
+                                                title="Copy full message"
+                                            >
+                                                {isCopied ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                                                <span>{isCopied ? t('sqlBlock.copied') : t('sqlBlock.copy')}</span>
+                                            </button>
                                         )}
-                                    </span>
+                                    </div>
                                     <div className="h-px flex-1 bg-gradient-to-r from-transparent via-border/50 to-transparent" />
                                 </div>
                             )}

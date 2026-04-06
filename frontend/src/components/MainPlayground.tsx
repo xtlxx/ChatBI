@@ -19,7 +19,7 @@ interface LayoutContext {
     setSidebarView: (v: 'nav' | 'settings') => void;
 }
 
-const CONTAINER_CLASS = "w-full max-w-3xl md:max-w-5xl lg:max-w-6xl xl:max-w-7xl 2xl:max-w-[75%] mx-auto transition-all duration-300 ease-in-out";
+const CONTAINER_CLASS = "w-full max-w-[min(95vw,1400px)] mx-auto transition-all duration-300 ease-in-out";
 
 export function MainPlayground() {
     const { t } = useTranslation();
@@ -614,7 +614,7 @@ export function MainPlayground() {
                         ) : (
                             <button
                                 disabled
-                                className="p-2 text-muted-foreground/30 cursor-not-allowed rounded-full w-10 h-10 flex items-center justify-center"
+                                className="p-2 text-muted-foreground/60 cursor-not-allowed rounded-full w-10 h-10 flex items-center justify-center"
                             >
                                 <Send size={18} className="ml-0.5" />
                             </button>
