@@ -149,11 +149,14 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
             },
             
             // 行内代码
-            return (
-                <code className="px-1.5 py-0.5 bg-muted/50 rounded text-xs font-mono text-pink-600 dark:text-pink-400" {...rest}>
-                    {children}
-                </code>
-            );
+            code(props) {
+                const { children, className, node, ...rest } = props;
+                return (
+                    <code className="px-1.5 py-0.5 bg-muted/50 rounded text-xs font-mono text-pink-600 dark:text-pink-400" {...rest}>
+                        {children}
+                    </code>
+                );
+            }
         }
     };
 
