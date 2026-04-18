@@ -1,6 +1,8 @@
 import json
+import re
 from typing import Any, List, Dict
 from datetime import datetime
+from pathlib import Path
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 # ============================================================
@@ -113,12 +115,22 @@ CORE_TABLES: Dict[str, Dict[str, Any]] = {
         'columns': ['seq', 'code', 'bath_no', 'mater_code', 'mater_name', 'storage《单位:双，入库数量》', 'out_storage《单位:双，出库数量》', 'price《单位:元，单价》', 'sum_price《单位:元，总金额》', 'supplier', 'create_date'],
         'relations': [],
     },
+    'proc_material_warehousing': {
+        'pk': 'seq',
+        'columns': ['seq', 'warehouse_entry_number', 'warehouse_entry_date《业务含义:入库日期，单据的业务发生时间》', 'supplier', 'supplier_seq', 'is_deleted', 'status'],
+        'relations': ['supplier_seq -> bas_supplier.seq'],
+    },
+    'proc_material_warehousing_info': {
+        'pk': 'seq',
+        'columns': ['seq', 'proc_material_warehousing_seq', 'in_code《业务含义:入库单号》', 'this_time_inventory_quantity《业务含义:材料入库数量、本次入库量，针对材料维度的采购入库》', 'inventory_quantity_purchase《单位:双，采购单位的入库数量》', 'store_unit_price《单位:元，入库单价》', 'is_deleted', 'business_type《业务含义:60为入库》'],
+        'relations': ['proc_material_warehousing_seq -> proc_material_warehousing.seq'],
+    },
 
     # === 财务出货与对账 ===
     'acc_product_shipment': {
         'pk': 'seq',
         'columns': ['seq', 'po_no', 'customer_id', 'customer_name', 'order_seq', 'sku', 'art_code', 'shipment_code', 'basic_size_code', 'price《单位:元，单价》',
-                    'art_name', 'shipment_quantity《单位:双，出货数量》', 'shipment_at', 'del_flag', 'is_available'],
+                    'art_name', 'shipment_quantity《业务含义:成品订单入库与出货数量，针对订单维度》', 'shipment_at', 'del_flag', 'is_available'],
         'relations': ['customer_id -> bas_custom.id', 'order_seq -> od_order_doc.seq'],
     },
     'acc_reconciliation': {
@@ -143,6 +155,190 @@ CORE_TABLES: Dict[str, Dict[str, Any]] = {
     }
 }
 
+
+def _load_metadata() -> dict[str, Any]:
+    candidates = [
+        Path(__file__).resolve().parents[2] / "metadata.json",
+        Path(__file__).resolve().parents[1] / "metadata.json",
+        Path.cwd() / "metadata.json",
+        Path.cwd() / "backend" / "metadata.json",
+    ]
+    for p in candidates:
+        if p.exists() and p.is_file():
+            try:
+                with p.open("r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+    return {}
+
+
+_METADATA: dict[str, Any] = _load_metadata()
+_METADATA_TABLES: dict[str, Any] = (_METADATA.get("tables") or {}) if isinstance(_METADATA, dict) else {}
+_AUDIT_COLUMNS = {
+    "created_by",
+    "created_at",
+    "updated_by",
+    "updated_at",
+    "deleted_by",
+    "deleted_at",
+}
+_SCHEMA_DISPLAY_EXCLUDE_COLUMNS = _AUDIT_COLUMNS | {
+    "is_deleted",
+    "enable",
+    "is_delete",
+    "del_flag",
+    "is_available",
+    "is_effective",
+}
+_NON_RELATION_COLUMNS = {
+    "is_deleted",
+    "enable",
+    "is_effective",
+    "is_delete",
+    "del_flag",
+    "is_available",
+}
+_REF_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9_]+)\.([a-zA-Z][a-zA-Z0-9_]+)")
+
+
+def _format_columns_from_metadata(meta_columns: list[dict[str, Any]]) -> list[str]:
+    out: list[str] = []
+    for c in meta_columns:
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+        if name.lower() in _SCHEMA_DISPLAY_EXCLUDE_COLUMNS:
+            continue
+        comment = (c.get("comment") or "").strip()
+        if comment:
+            out.append(f"{name}《{comment}》")
+        else:
+            out.append(name)
+    return out
+
+
+def _hydrate_core_tables_from_metadata() -> None:
+    if not _METADATA_TABLES:
+        return
+    for table_name, info in CORE_TABLES.items():
+        meta = _METADATA_TABLES.get(table_name.lower())
+        if not isinstance(meta, dict):
+            continue
+        meta_cols = meta.get("columns") or []
+        if isinstance(meta_cols, list) and meta_cols:
+            info["columns"] = _format_columns_from_metadata(meta_cols)
+
+        pk_cols: list[str] = []
+        for cons in (meta.get("constraints") or []):
+            if not isinstance(cons, dict):
+                continue
+            if str(cons.get("type") or "").upper() == "PRIMARY KEY":
+                cols = cons.get("columns") or []
+                if isinstance(cols, list):
+                    pk_cols = [str(x) for x in cols if x]
+                break
+        if pk_cols:
+            info["pk"] = pk_cols[0]
+
+
+def _infer_relations_from_metadata() -> None:
+    if not _METADATA_TABLES:
+        return
+
+    meta_cols_map: dict[str, set[str]] = {}
+    for tname, tmeta in _METADATA_TABLES.items():
+        cols: set[str] = set()
+        if isinstance(tmeta, dict):
+            for c in (tmeta.get("columns") or []):
+                if isinstance(c, dict) and c.get("name"):
+                    cols.add(str(c["name"]).lower())
+        meta_cols_map[str(tname).lower()] = cols
+
+    for table_name, info in CORE_TABLES.items():
+        meta = _METADATA_TABLES.get(table_name.lower())
+        if not isinstance(meta, dict):
+            continue
+
+        relations = set(info.get("relations") or [])
+        for c in (meta.get("columns") or []):
+            if not isinstance(c, dict):
+                continue
+
+            col_name = (c.get("name") or "").strip()
+            if not col_name:
+                continue
+
+            col_name_l = col_name.lower()
+            if col_name_l in _AUDIT_COLUMNS or col_name_l in _NON_RELATION_COLUMNS:
+                continue
+
+            comment = (c.get("comment") or "").strip()
+            if comment:
+                for m in _REF_RE.finditer(comment):
+                    ref_table = m.group(1).lower()
+                    ref_col = m.group(2)
+                    if ref_table in CORE_TABLES and ref_table in meta_cols_map and ref_col.lower() in meta_cols_map[ref_table]:
+                        relations.add(f"{col_name} -> {ref_table}.{ref_col}")
+
+            if col_name_l.endswith("_seq"):
+                base = col_name_l[:-4]
+                if base in CORE_TABLES and base in meta_cols_map and "seq" in meta_cols_map[base]:
+                    relations.add(f"{col_name} -> {base}.seq")
+            elif col_name_l.endswith("_id"):
+                base = col_name_l[:-3]
+                if base in CORE_TABLES and base in meta_cols_map:
+                    if "id" in meta_cols_map[base]:
+                        relations.add(f"{col_name} -> {base}.id")
+                    elif "seq" in meta_cols_map[base]:
+                        relations.add(f"{col_name} -> {base}.seq")
+
+        info["relations"] = sorted(relations)
+
+
+def infer_filter_rule_for_table(table_name: str) -> str:
+    direct_rule = FILTER_RULES.get(table_name)
+    if direct_rule:
+        return direct_rule
+    for k, v in FILTER_RULES.items():
+        if k.endswith("_") and table_name.startswith(k):
+            return v
+
+    cols: set[str] = set()
+    meta = _METADATA_TABLES.get(table_name.lower())
+    if isinstance(meta, dict):
+        for c in (meta.get("columns") or []):
+            if isinstance(c, dict) and c.get("name"):
+                cols.add(str(c["name"]).lower())
+    else:
+        for c in CORE_TABLES.get(table_name, {}).get("columns", []):
+            if isinstance(c, str) and c:
+                cols.add(c.split("《")[0].strip().lower())
+
+    parts: list[str] = []
+
+    if "del_flag" in cols and "is_available" in cols:
+        parts.append("del_flag = '0'")
+        parts.append("is_available = '0'")
+
+    if "is_delete" in cols:
+        parts.append("is_delete = 0")
+
+    if "is_deleted" in cols:
+        parts.append("is_deleted = 0")
+
+    if "enable" in cols:
+        parts.append("enable = 1")
+
+    if table_name.startswith("proc_") and "is_effective" in cols:
+        parts.append("is_effective = 1")
+
+    return " AND ".join(parts) if parts else "1 = 1"
+
+
+_hydrate_core_tables_from_metadata()
+_infer_relations_from_metadata()
+
 # ============================================================
 # 软删除与可用性规则（极其重要！）
 # ============================================================
@@ -153,7 +349,7 @@ FILTER_RULES = {
     'bas_': "is_delete = 0 AND enable = 1",
     'om_': "is_deleted = 0 AND enable = 1",
     'od_': "is_deleted = 0 AND enable = 1",
-    'proc_': "is_deleted = 0 AND enable = 1",
+    'proc_': "is_deleted = 0",
     'po_': "1 = 1", # po_defective_product 没有通用软删字段
     't_': "is_deleted = 0", # t_standard_cost_budget
     'anta_': "is_delete = 0", # anta_bom_detail_info
@@ -172,21 +368,20 @@ def generate_schema_info(current_time: str = None) -> str:
         "这是一个鞋服制造行业的 MES/ERP 系统数据库。",
         "",
         "🚨 严格规则（必须遵守，否则 SQL 会失败）：",
-        "1. 所有非核心业务字段（审计字段、创建/更新人、备注等）已被物理移除，你只看到业务必须的核心字段，禁止臆造任何其他字段。",
+        "1. 字段列表中已隐藏审计字段与软删除/可用性字段（如 is_deleted/enable/del_flag 等），但你在 WHERE 中仍必须按规则补齐这些过滤条件。",
         "2. 优先使用名称/中文状态字段进行条件过滤，而不是使用 code 或 seq 字段猜测。",
         "3. 带有 (注释:xxx) 的字段说明，请严格遵循其含义进行统计，且在生成 SQL 时不要将注释部分写入列名中。",
         "4. JOIN 时只能使用 relations 中定义的外键关联。",
         "5. 聚合查询（如 GROUP BY）时，如果存在实体主键/关联键（如 custom_seq, art_seq 等），请优先使用键和名称一起分组（例如 GROUP BY custom_seq, custom_name），防止同名数据混淆。",
+        "6. 对于以 proc_ 开头的表，如果表中存在 is_effective 字段，查询时优先额外添加 is_effective = 1 过滤。",
         "",
         "🗑️ 数据清洗规则（软删除与可用性强制执行！）",
         "本系统全部采用软删除逻辑。任何 SELECT 查询涉及的每一张表（包括 JOIN 的表）都必须加上正确的过滤条件，否则视为严重错误！"
     ]
     
-    for prefix, rule in FILTER_RULES.items():
-        if prefix == 'default':
-            lines.append(f"- 其他表（未列出前缀）：必须包含条件 `{rule}`")
-        else:
-            lines.append(f"- 以 {prefix} 开头的表：必须包含条件 `{rule}`")
+    for table_name in sorted(CORE_TABLES.keys()):
+        rule = infer_filter_rule_for_table(table_name)
+        lines.append(f"- 表 {table_name}：必须包含条件 `{rule}`")
             
     lines.append("")
     lines.append("📖 业务字典说明：")
@@ -214,6 +409,303 @@ def generate_schema_info(current_time: str = None) -> str:
     return "\n".join(lines)
 
 SCHEMA_CONTEXT = generate_schema_info()
+
+
+_QUERY_STOPWORDS = {
+    "查询",
+    "统计",
+    "分析",
+    "查看",
+    "获取",
+    "最近",
+    "近",
+    "本月",
+    "本周",
+    "本年",
+    "今年",
+    "今天",
+    "昨日",
+    "昨天",
+    "今天的",
+    "的",
+    "了",
+    "和",
+    "与",
+    "及",
+    "或",
+    "对",
+    "按",
+    "每个",
+    "各",
+    "多少",
+    "数量",
+    "总数",
+    "总量",
+    "明细",
+    "详情",
+    "列表",
+    "top",
+    "排名",
+}
+
+_TERM_TABLE_HINTS: dict[str, list[str]] = {
+    "订单": ["od_order_doc", "od_order_doc_article", "proc_material_procurement", "acc_product_shipment"],
+    "正式订单": ["od_order_doc", "od_order_doc_article"],
+    "采购": ["proc_material_procurement"],
+    "入库": ["proc_material_warehousing", "proc_material_warehousing_info", "material_inventory"],
+    "出库": ["acc_product_shipment"],
+    "出货": ["acc_product_shipment"],
+    "库存": ["store", "material_inventory"],
+    "质检": ["proc_material_quality_spection", "proc_material_quality_spection_info", "shoe_qc_analysis"],
+    "定检": ["shoe_qc_analysis"],
+    "巡检": ["shoe_qc_analysis"],
+    "成本": ["t_standard_cost_budget", "t_material_cost"],
+    "bom": ["anta_bom_detail_info"],
+}
+
+
+def _extract_query_terms(query: str) -> list[str]:
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+    raw = re.findall(r"[a-zA-Z0-9_]+|[\u4e00-\u9fff]{2,}", q)
+    out: list[str] = []
+    for t in raw:
+        tt = t.strip().lower()
+        if not tt:
+            continue
+        if tt in _QUERY_STOPWORDS:
+            continue
+        if len(tt) < 2:
+            continue
+        out.append(tt)
+    seen = set()
+    deduped: list[str] = []
+    for t in out:
+        if t in seen:
+            continue
+        seen.add(t)
+        deduped.append(t)
+    return deduped[:24]
+
+
+def _get_table_text(tname: str, meta: dict[str, Any]) -> str:
+    parts = [tname.lower(), str(meta.get("comment") or "").lower()]
+    for c in (meta.get("columns") or []):
+        if not isinstance(c, dict):
+            continue
+        n = str(c.get("name") or "").lower()
+        cm = str(c.get("comment") or "").lower()
+        if n:
+            parts.append(n)
+        if cm:
+            parts.append(cm)
+    return "\n".join([p for p in parts if p])
+
+
+def _score_table_for_query(tname: str, meta: dict[str, Any], terms: list[str]) -> int:
+    if not terms:
+        return 0
+    name_l = tname.lower()
+    comment_l = str(meta.get("comment") or "").lower()
+    text_l = None
+    score = 0
+    for term in terms:
+        if term in name_l:
+            score += 10
+        if term in comment_l:
+            score += 6
+        if score and score >= 30:
+            continue
+        if text_l is None:
+            text_l = _get_table_text(tname, meta)
+        if term in text_l:
+            score += 2
+    return score
+
+
+def _infer_relations_from_table_metadata(table_name: str) -> list[str]:
+    t = _METADATA_TABLES.get(table_name.lower())
+    if not isinstance(t, dict):
+        return []
+
+    meta_cols_map: dict[str, set[str]] = {}
+    for tname, tmeta in _METADATA_TABLES.items():
+        cols: set[str] = set()
+        if isinstance(tmeta, dict):
+            for c in (tmeta.get("columns") or []):
+                if isinstance(c, dict) and c.get("name"):
+                    cols.add(str(c["name"]).lower())
+        meta_cols_map[str(tname).lower()] = cols
+
+    relations: set[str] = set()
+    for c in (t.get("columns") or []):
+        if not isinstance(c, dict):
+            continue
+        col_name = (c.get("name") or "").strip()
+        if not col_name:
+            continue
+        col_name_l = col_name.lower()
+        if col_name_l in _AUDIT_COLUMNS or col_name_l in _NON_RELATION_COLUMNS:
+            continue
+
+        comment = (c.get("comment") or "").strip()
+        if comment:
+            for m in _REF_RE.finditer(comment):
+                ref_table = m.group(1).lower()
+                ref_col = m.group(2)
+                if ref_table in meta_cols_map and ref_col.lower() in meta_cols_map[ref_table]:
+                    relations.add(f"{col_name} -> {ref_table}.{ref_col}")
+
+        if col_name_l.endswith("_seq"):
+            base = col_name_l[:-4]
+            if base in meta_cols_map and "seq" in meta_cols_map[base]:
+                relations.add(f"{col_name} -> {base}.seq")
+        elif col_name_l.endswith("_id"):
+            base = col_name_l[:-3]
+            if base in meta_cols_map:
+                if "id" in meta_cols_map[base]:
+                    relations.add(f"{col_name} -> {base}.id")
+                elif "seq" in meta_cols_map[base]:
+                    relations.add(f"{col_name} -> {base}.seq")
+
+    return sorted(relations)
+
+
+_REL_TARGET_RE = re.compile(r"->\s*([a-zA-Z][a-zA-Z0-9_]+)\.")
+
+
+def _extract_relation_target_tables(relations: list[str]) -> set[str]:
+    out: set[str] = set()
+    for r in relations or []:
+        if not isinstance(r, str):
+            continue
+        m = _REL_TARGET_RE.search(r)
+        if not m:
+            continue
+        out.add(m.group(1).lower())
+    return out
+
+
+def _get_pk_from_metadata(table_name: str) -> str:
+    meta = _METADATA_TABLES.get(table_name.lower())
+    if not isinstance(meta, dict):
+        return CORE_TABLES.get(table_name, {}).get("pk") or "id"
+    for cons in (meta.get("constraints") or []):
+        if not isinstance(cons, dict):
+            continue
+        if str(cons.get("type") or "").upper() == "PRIMARY KEY":
+            cols = cons.get("columns") or []
+            if isinstance(cols, list) and cols:
+                return str(cols[0])
+            break
+    cols = {str(c.get("name") or "").lower() for c in (meta.get("columns") or []) if isinstance(c, dict)}
+    if "seq" in cols:
+        return "seq"
+    if "id" in cols:
+        return "id"
+    return "id"
+
+
+def generate_schema_info_for_query(query: str, current_time: str | None = None, max_tables: int = 18) -> str:
+    if current_time is None:
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if not _METADATA_TABLES:
+        return generate_schema_info(current_time=current_time)
+
+    terms = _extract_query_terms(query)
+    selected: set[str] = set()
+
+    q_l = (query or "").lower()
+    for k, hints in _TERM_TABLE_HINTS.items():
+        if k.lower() in q_l:
+            selected.update([h.lower() for h in hints])
+
+    scored: list[tuple[int, str]] = []
+    for tname, meta in _METADATA_TABLES.items():
+        if not isinstance(meta, dict):
+            continue
+        s = _score_table_for_query(str(tname), meta, terms)
+        if s > 0:
+            scored.append((s, str(tname).lower()))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    for _, t in scored:
+        selected.add(t)
+        if len(selected) >= max_tables:
+            break
+
+    if not selected:
+        selected.update([t.lower() for t in list(CORE_TABLES.keys())[:max_tables]])
+
+    expanded = True
+    while expanded and len(selected) < max_tables:
+        expanded = False
+        for t in list(selected):
+            rels = _infer_relations_from_table_metadata(t)
+            if not rels:
+                rels = list(CORE_TABLES.get(t, {}).get("relations") or [])
+            for rt in _extract_relation_target_tables(rels):
+                if rt in _METADATA_TABLES and rt not in selected:
+                    selected.add(rt)
+                    expanded = True
+                    if len(selected) >= max_tables:
+                        break
+            if len(selected) >= max_tables:
+                break
+
+    lines = [
+        f"当前系统时间：{current_time}",
+        "### 数据库表关系说明 (Schema Context)",
+        "这是一个鞋服制造行业的 MES/ERP 系统数据库。",
+        "",
+        "🚨 严格规则（必须遵守，否则 SQL 会失败）：",
+        "1. 字段列表中已隐藏审计字段与软删除/可用性字段（如 is_deleted/enable/del_flag 等），但你在 WHERE 中仍必须按规则补齐这些过滤条件。",
+        "2. 优先使用名称/中文状态字段进行条件过滤，而不是使用 code 或 seq 字段猜测。",
+        "3. 带有 (注释:xxx) 的字段说明，请严格遵循其含义进行统计，且在生成 SQL 时不要将注释部分写入列名中。",
+        "4. JOIN 时只能使用 relations 中定义的外键关联。",
+        "5. 聚合查询（如 GROUP BY）时，如果存在实体主键/关联键（如 custom_seq, art_seq 等），请优先使用键和名称一起分组（例如 GROUP BY custom_seq, custom_name），防止同名数据混淆。",
+        "6. 对于以 proc_ 开头的表，如果表中存在 is_effective 字段，查询时优先额外添加 is_effective = 1 过滤。",
+        "",
+        "🗑️ 数据清洗规则（软删除与可用性强制执行！）",
+        "任何 SELECT 查询涉及的每一张表（包括 JOIN 的表）都必须加上正确的过滤条件，否则视为严重错误！",
+        "",
+        "本次问题相关表的过滤条件：",
+    ]
+
+    for table_name in sorted(selected):
+        rule = infer_filter_rule_for_table(table_name)
+        lines.append(f"- 表 {table_name}：必须包含条件 `{rule}`")
+
+    lines.append("")
+    lines.append("📊 本次问题相关表与关键字段：")
+
+    for table_name in sorted(selected):
+        meta = _METADATA_TABLES.get(table_name.lower())
+        if not isinstance(meta, dict):
+            continue
+        pk = _get_pk_from_metadata(table_name)
+        cols = _format_columns_from_metadata(meta.get("columns") or [])
+        relations = _infer_relations_from_table_metadata(table_name)
+        if not relations:
+            relations = list(CORE_TABLES.get(table_name, {}).get("relations") or [])
+
+        lines.append(f"- 表 `{table_name}` (主键: {pk})")
+        formatted_columns = []
+        for col in cols:
+            if "《" in col and "》" in col:
+                col_name = col.split("《")[0]
+                comment = col.split("《")[1].split("》")[0]
+                formatted_columns.append(f"{col_name} (注释: {comment})")
+            else:
+                formatted_columns.append(col)
+        if formatted_columns:
+            lines.append(f"  字段: {', '.join(formatted_columns)}")
+        if relations:
+            lines.append(f"  关联关系: {', '.join(relations)}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 # ============================================================
 # Few-Shot 示例库（包含 JOIN 示例并保留纯 JSON 输出格式）
@@ -255,6 +747,15 @@ FEW_SHOT_EXAMPLES = [
     "thought": "1. 查询库存表 store\\n2. 条件 sku='XXX'\\n3. 过滤条件 is_deleted='0' AND enable='1'",
     "sql": "SELECT sku, material_name, warehouse_name, on_hand_qty FROM store WHERE sku = 'XXX' AND is_deleted = '0' AND enable = '1' LIMIT 20"
 }"""
+    },
+    {
+        "mode": "sql",
+        "intent": "qc_analysis",
+        "query": "你说说脱胶定检原因",
+        "response": """{
+    "thought": "1. 查询定检异常原因分析\\n2. 需要 shoe_qc_analysis 表\\n3. 过滤条件 defect_reason 包含 '脱胶'\\n4. shoe_qc_analysis 表不需要软删除过滤",
+    "sql": "SELECT defect_reason, pair_count, inspection_method, improvement_method FROM shoe_qc_analysis WHERE defect_reason LIKE '%脱胶%' LIMIT 100"
+}"""
     }
 ]
 
@@ -267,6 +768,8 @@ def select_few_shot_examples(query: str, max_examples: int = 4, mode: str = "sql
         intent = "join_detail"
     elif any(kw in q_lower for kw in ["库存", "在库", "剩余"]):
         intent = "inventory"
+    elif any(kw in q_lower for kw in ["定检", "巡检", "质检", "脱胶", "原因", "异常"]):
+        intent = "qc_analysis"
     else:
         intent = "aggregation"
     
@@ -443,6 +946,7 @@ SQL 结果：{sql_result}"""),
 
 __all__ = [
     "SCHEMA_CONTEXT",
+    "generate_schema_info_for_query",
     "select_few_shot_examples",
     "format_few_shot_examples",
     "THINKING_PROMPT",

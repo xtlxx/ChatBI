@@ -292,6 +292,10 @@ export function MainPlayground() {
         }
 
         // 创建新的 AbortController
+        // 如果之前有正在进行的请求，先取消它
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+        }
         abortControllerRef.current = new AbortController();
 
         try {
@@ -301,9 +305,11 @@ export function MainPlayground() {
                     connection_id: selectedConnectionId,
                     llm_config_id: selectedLlmConfigId,
                     session_id: sessionId,
-                    stream: true
                 },
                 (event) => {
+                    // 检查是否已被取消，如果取消则直接忽略所有回调
+                    if (abortControllerRef.current?.signal.aborted) return;
+
                     setMessages(prev => {
                         const newMessages = [...prev];
                         const msgIndex = newMessages.findIndex(m => String(m.id) === String(aiMsgId));

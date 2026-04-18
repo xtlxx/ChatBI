@@ -21,6 +21,7 @@ from .prompts import (
   RESPONSE_GEN_SYSTEM,
   CHART_GEN_SYSTEM,
   SCHEMA_CONTEXT,
+  generate_schema_info_for_query,
   format_few_shot_examples,
   select_few_shot_examples,
 )
@@ -166,6 +167,7 @@ class ChatBIAgent:
     async def retrieve_schema_node(state: AgentState) -> dict[str, Any]:
       node_start = datetime.now()
       try:
+        base_schema_context = generate_schema_info_for_query(state.get("query", ""))
         dialect_info = ""
         if self.adapter:
           date_func = self.adapter.get_date_format_function() or "DATE_FORMAT"
@@ -178,11 +180,14 @@ class ChatBIAgent:
           )
 
         dynamic_tables = await self.db_tools.get_all_tables_info()
+        dynamic_tables = "\n".join(str(dynamic_tables).splitlines()[:200])
+        if len(dynamic_tables) > 6000:
+          dynamic_tables = dynamic_tables[:6000] + "\n..."
 
         full_schema_context = (
-          f"{SCHEMA_CONTEXT}\n"
+          f"{base_schema_context}\n"
           f"{dialect_info}\n"
-          f"### 当前数据库全量表列表\n{dynamic_tables}"
+          f"### 当前数据库表列表（节选）\n{dynamic_tables}"
         )
 
         duration_ms = (datetime.now() - node_start).total_seconds() * 1000
@@ -374,9 +379,10 @@ class ChatBIAgent:
           raise ValueError("No SQL query to validate")
 
         error = None
+        formatted_sql = None
         try:
             dialect = getattr(self.adapter, "sqlglot_dialect", "postgres") if hasattr(self, "adapter") and self.adapter else "postgres"
-            validate_and_format_sql(sql, dialect=dialect)
+            formatted_sql = validate_and_format_sql(sql, dialect=dialect)
         except ValueError as e:
             error = str(e)
 
@@ -414,6 +420,7 @@ class ChatBIAgent:
         return {
           "current_phase": "validate_sql",
           "validation_result": {"is_valid": True, "issues": [], "message": "SQL 通过校验"},
+          "sql_attempt": {**state.get("sql_attempt", {}), "query": formatted_sql or sql},
           "steps": ["validate_sql_pass"],
           "timings": {**state.get("timings", {}), "validate_sql": duration_ms},
           "has_error": False,
@@ -512,6 +519,7 @@ class ChatBIAgent:
         from langchain_core.output_parsers import StrOutputParser
 
         # 文本生成链（带标签以便流式输出时识别）
+        # 注意：此处温度受用户数据库 llm_config 的 temperature 字段全局控制，避免强制覆盖破坏用户设定
         text_llm = self.llm.with_config({"tags": ["report_generator"]})
         text_chain = self.response_gen_prompt | text_llm | StrOutputParser()
 

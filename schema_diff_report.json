@@ -1,0 +1,12 @@
+{
+  "summary": {
+    "pdm_table_count": 644,
+    "metadata_table_count": 644,
+    "missing_table_count": 0,
+    "extra_table_count": 0,
+    "tables_with_column_diff_count": 0
+  },
+  "missing_in_metadata": [],
+  "extra_in_metadata": [],
+  "column_diff": {}
+}

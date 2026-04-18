@@ -135,8 +135,19 @@ export const chatService = {
         },
         onerror(err: unknown) {
           if (signal?.aborted) {
-            throw err; // 抛出错误以终止 fetchEventSource 的内部重试循环
+            // 如果是被手动 abort 取消的，直接抛出以触发 catch 块，但不要重试
+            throw err;
           }
+          // 浏览器原生的 fetch 被 abort 时，也会抛出 DOMException(name='AbortError')
+          if (err instanceof DOMException && err.name === 'AbortError') {
+             throw err; // 将被外层的 catch 捕获并静默处理
+          }
+          
+          // @microsoft/fetch-event-source 在 abort 时有时会直接抛出包含 abort 关键字的 Error
+          if (err instanceof Error && err.message.toLowerCase().includes('abort')) {
+             throw err;
+          }
+          
           console.error("流读取错误:", err);
           if (hasReceivedData) {
              onChunk({
@@ -146,6 +157,13 @@ export const chatService = {
              });
              throw err; // 抛出错误以终止，不进行重试尝试
           }
+          
+          // 网络级别的致命错误 (例如跨域、服务器拒绝连接)，不要重试，直接抛出
+          if (err instanceof Error && (err.message.includes('服务器错误') || err.message.includes('请求错误'))) {
+             throw err;
+          }
+
+          // 其他短暂网络抖动，允许重试
           return Math.min(1000 * Math.pow(2, 3), 15000); // 出现错误时，最多重试并以指数退避策略延迟，上限 15s
         }
       });

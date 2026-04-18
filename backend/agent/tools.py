@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlglot import exp
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from agent.prompts import FILTER_RULES
+from agent.prompts import FILTER_RULES, infer_filter_rule_for_table
 from core.db_adapter import AdapterFactory
 from logging_config import get_logger
 from models.db_connection import DbType
@@ -50,6 +50,78 @@ def safe_serializer(obj: Any) -> Any:
     if isinstance(obj, decimal.Decimal):
         return float(obj)  # 或者 str(obj) 以保持精度
     return str(obj)
+
+
+def _normalize_literal_sql(lit_sql: str) -> str:
+    s = (lit_sql or "").strip().lower()
+    if s.startswith("'") and s.endswith("'") and len(s) >= 2:
+        inner = s[1:-1]
+        if inner.isdigit():
+            return inner
+        return inner
+    if s.isdigit():
+        return s
+    return s
+
+
+def _extract_eq_predicates(expr: exp.Expression) -> set[tuple[str, str]]:
+    out: set[tuple[str, str]] = set()
+    for e in expr.find_all(exp.EQ):
+        left, right = e.left, e.right
+        if isinstance(left, exp.Column) and isinstance(right, exp.Literal):
+            out.add((left.name.lower(), _normalize_literal_sql(right.sql())))
+        elif isinstance(right, exp.Column) and isinstance(left, exp.Literal):
+            out.add((right.name.lower(), _normalize_literal_sql(left.sql())))
+    return out
+
+
+def _enforce_required_table_filters(expression: exp.Expression, dialect: str) -> None:
+    cte_names: set[str] = set()
+    for cte in expression.find_all(exp.CTE):
+        if cte.alias_or_name:
+            cte_names.add(cte.alias_or_name)
+
+    tables: set[str] = set()
+    for t in expression.find_all(exp.Table):
+        if t.name and t.name not in cte_names:
+            tables.add(t.name)
+
+    present: set[tuple[str, str]] = set()
+    where_expr = expression.args.get("where")
+    if isinstance(where_expr, exp.Where):
+        present |= _extract_eq_predicates(where_expr)
+    elif isinstance(where_expr, exp.Expression):
+        present |= _extract_eq_predicates(where_expr)
+
+    for j in expression.find_all(exp.Join):
+        on_expr = j.args.get("on")
+        if isinstance(on_expr, exp.Expression):
+            present |= _extract_eq_predicates(on_expr)
+
+    missing: list[str] = []
+    for table_name in sorted(tables):
+        rule = infer_filter_rule_for_table(table_name)
+        if not rule or rule.strip() == "1 = 1":
+            continue
+
+        try:
+            rule_select = sqlglot.parse_one(f"SELECT * FROM x WHERE {rule}", read=dialect)
+        except Exception:
+            rule_select = sqlglot.parse_one(f"SELECT * FROM x WHERE {rule}")
+        req_where = rule_select.args.get("where")
+        required: set[tuple[str, str]] = set()
+        if isinstance(req_where, exp.Where):
+            required = _extract_eq_predicates(req_where)
+        elif isinstance(req_where, exp.Expression):
+            required = _extract_eq_predicates(req_where)
+
+        for col, lit in required:
+            if (col, lit) not in present:
+                missing.append(f"{table_name}: {rule}")
+                break
+
+    if missing:
+        raise ValueError("缺少必选软删除/可用性过滤条件（每张表都必须包含）：\n" + "\n".join(missing))
 
 
 def validate_and_format_sql(sql: str, dialect: str = "postgres") -> str:
@@ -104,6 +176,8 @@ def validate_and_format_sql(sql: str, dialect: str = "postgres") -> str:
         col_name = col.name.lower()
         if any(kw in col_name for kw in sensitive_keywords):
             raise ValueError(f"安全拦截: 查询中包含了被禁止访问的敏感字段 '{col.name}'。")
+
+    _enforce_required_table_filters(expression, dialect=dialect)
 
     # 4. 强制 LIMIT 策略 (防止全表扫描拖垮内存)
     # 针对最外层的 SELECT 语句注入 LIMIT
@@ -168,13 +242,30 @@ def validate_sql_integrity(query: str) -> str | None:
     for node in parsed.find_all(exp.Column):
         col_name = node.name
         table_alias = node.table
+        
+        # 跳过函数调用内的星号，如 COUNT(*)
+        if col_name == "*":
+            continue
+            
         if table_alias:
             real_table = tables_in_query.get(table_alias)
             if real_table:
                 table_meta = metadata["tables"][real_table]
                 valid_cols = {c["name"].lower() for c in table_meta["columns"]}
-                if col_name.lower() not in valid_cols and col_name != "*":
+                if col_name.lower() not in valid_cols:
                     return f"验证错误：列 '{col_name}' 不存在于表 '{real_table}' 中。"
+        else:
+            # 如果没有 alias，检查是否在所有查询的表中
+            found = False
+            for real_table in tables_in_query.values():
+                table_meta = metadata["tables"][real_table]
+                valid_cols = {c["name"].lower() for c in table_meta["columns"]}
+                if col_name.lower() in valid_cols:
+                    found = True
+                    break
+            if not found and tables_in_query:
+                # 只有当确实查询了表且没找到列时才报错
+                return f"验证错误：列 '{col_name}' 不存在于任何相关表中，请检查字段名是否正确。"
 
     return None
 
@@ -212,6 +303,10 @@ class DatabaseTools:
                 return json.dumps({"error": str(ve), "query": query}, ensure_ascii=False)
             
             self.logger.info("sql_secured_and_formatted", final_query=final_query[:200])
+
+            integrity_error = validate_sql_integrity(final_query)
+            if integrity_error:
+                return json.dumps({"error": integrity_error, "query": final_query}, ensure_ascii=False)
 
             # 2. 执行查询
             import asyncio
