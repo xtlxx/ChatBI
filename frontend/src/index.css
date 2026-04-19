@@ -195,7 +195,7 @@
   }
 
   .ai-gradient-bg {
-    background: var(--ai-glow);
+    background-image: var(--ai-glow);
   }
 
   ::-webkit-scrollbar {

@@ -535,10 +535,10 @@ export function MainPlayground() {
                 ) : (
                     <>
                         {messages.length === 0 && (
-                            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-2xl mx-auto space-y-8 animate-fade-in-up"> 
+                            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-2xl mx-auto space-y-8 animate-fade-in-up px-4"> 
                                 <div className="space-y-4"> 
-                                    <h1 className="text-5xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-100 italic"> 
-                                        How can I help you <span className="text-transparent bg-clip-text ai-gradient-bg">analyze</span> today? 
+                                    <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-100 italic leading-normal pb-2"> 
+                                        How can I help you <span className="text-transparent bg-clip-text ai-gradient-bg px-2 py-1">analyze</span> today? 
                                     </h1> 
                                     <p className="text-zinc-500 text-lg"> 
                                         连接您的 ERP 数据，通过自然语言即时生成财务报表与业务洞察。 
@@ -548,7 +548,7 @@ export function MainPlayground() {
                                 {/* 示例卡片：去背景，改为精细边框 */} 
                                 <div className="grid grid-cols-2 gap-4 w-full"> 
                                     {[
-                                        { key: 'sales', icon: TrendingUp, label: '统计 2024 年销售额', desc: '按月度维度展示并生成趋势图' },
+                                        { key: 'sales', icon: TrendingUp, label: `统计 ${new Date().getFullYear()} 年销售额`, desc: '按月度维度展示并生成趋势图' },
                                         { key: 'inventory', icon: BarChart3, label: '分析当前库存', desc: '找出库存积压最多的 10 种物料' }
                                     ].map(item => ( 
                                         <button 

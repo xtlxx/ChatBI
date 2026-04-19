@@ -3,12 +3,14 @@ import path from "path"
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    basicSsl(),
   ],
   test: {
     environment: 'jsdom',
@@ -32,7 +34,7 @@ export default defineConfig({
           secure: false,
           timeout: 600000, // 10 minutes
           proxyTimeout: 600000, // 10 minutes
-          ws: true, // Enable WebSocket proxying just in case
+          ws: true, // 启用 WebSocket 代理，以防万一
         },
       },
   },
