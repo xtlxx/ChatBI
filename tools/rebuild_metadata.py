@@ -30,20 +30,14 @@ _end_table_re = re.compile(r"^\s*\)\s*ENGINE\s*=", re.IGNORECASE)
 _col_re = re.compile(
     r"^\s*`(?P<name>[^`]+)`\s+"
     r"(?P<type>.+?)\s+"
-    r"(?P<nullability>NOT\s+NULL|NULL)\s+"
-    r"DEFAULT\s+(?P<default>[^ ]+)"
-    r"(?:\s+COMMENT\s+'(?P<comment>[^']*)')?"
+    r"(?P<nullability>NOT\s+NULL|NULL)\s*"
+    r"(?:AUTO_INCREMENT\s*)?"
+    r"(?:DEFAULT\s+(?P<default>(?:'[^']*'|[^ ]+)(?:\s+ON\s+UPDATE\s+[^ ]+)?)\s*)?"
+    r"(?:COMMENT\s+'(?P<comment>(?:\\.|[^'\\])*)')?"
     r"\s*,?\s*$",
     re.IGNORECASE,
 )
-_col_re_no_default = re.compile(
-    r"^\s*`(?P<name>[^`]+)`\s+"
-    r"(?P<type>.+?)\s+"
-    r"(?P<nullability>NOT\s+NULL|NULL)"
-    r"(?:\s+COMMENT\s+'(?P<comment>[^']*)')?"
-    r"\s*,?\s*$",
-    re.IGNORECASE,
-)
+_col_re_no_default = re.compile(r"xxx", re.IGNORECASE) # obsolete
 
 _pk_re = re.compile(r"^\s*PRIMARY\s+KEY\s*\((?P<cols>[^)]+)\)", re.IGNORECASE)
 _idx_re = re.compile(
@@ -104,33 +98,15 @@ def parse_pdm_schema(sql_path: str) -> dict[str, TableDef]:
                 col_type = mc.group("type").strip()
                 nullability = mc.group("nullability").strip().upper()
                 nullable = nullability == "NULL"
-                default = mc.group("default")
+                default = mc.group("default") if "default" in mc.groupdict() else None
                 default = None if default is None else default.strip()
-                comment = mc.group("comment")
+                comment = mc.group("comment") if "comment" in mc.groupdict() else None
                 current.columns.append(
                     ColumnDef(
                         name=col_name,
                         type=col_type,
                         nullable=nullable,
                         default=default,
-                        comment=comment,
-                    )
-                )
-                continue
-
-            mc2 = _col_re_no_default.match(line)
-            if mc2:
-                col_name = mc2.group("name").strip()
-                col_type = mc2.group("type").strip()
-                nullability = mc2.group("nullability").strip().upper()
-                nullable = nullability == "NULL"
-                comment = mc2.group("comment")
-                current.columns.append(
-                    ColumnDef(
-                        name=col_name,
-                        type=col_type,
-                        nullable=nullable,
-                        default=None,
                         comment=comment,
                     )
                 )

@@ -21695,7 +21695,8 @@ BEGIN
 
 			DECLARE done INT DEFAULT FALSE; 
 		  DECLARE v_old_ROW_NO varchar(255); 
-			DECLARE v_new_row_no varchar(255);       DECLARE v_manual_prod_code varchar(255);  				
+			DECLARE v_new_row_no varchar(255); 
+      DECLARE v_manual_prod_code varchar(255);  				
 			DECLARE v_new_manual_prod_code varchar(255);  
 			DECLARE v_new_customer_code varchar(255);  
       
@@ -24010,5 +24011,53 @@ DO BEGIN
 END
 ;;
 delimiter ;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+/*
+ Navicat Premium Dump SQL
+
+ Source Server         : PDM
+ Source Server Type    : MySQL
+ Source Server Version : 50736 (5.7.36)
+ Source Host           : 59.37.133.99:6306
+ Source Schema         : pdm
+
+ Target Server Type    : MySQL
+ Target Server Version : 50736 (5.7.36)
+ File Encoding         : 65001
+
+ Date: 20/04/2026 00:53:08
+*/
+
+SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- ----------------------------
+-- Table structure for shoe_qc_analysis
+-- ----------------------------
+DROP TABLE IF EXISTS `shoe_qc_analysis`;
+CREATE TABLE `shoe_qc_analysis`  (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `defect_reason` varchar(255) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL COMMENT '定检原因',
+  `pair_count` int(11) NULL DEFAULT NULL COMMENT '双数',
+  `inspection_method` text CHARACTER SET utf8 COLLATE utf8_general_ci NULL COMMENT '巡检处理方法',
+  `improvement_method` text CHARACTER SET utf8 COLLATE utf8_general_ci NULL COMMENT '现场改善方法',
+  `is_confirmed` varchar(50) CHARACTER SET utf8 COLLATE utf8_general_ci NULL DEFAULT NULL COMMENT '确定否',
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE = InnoDB AUTO_INCREMENT = 10 CHARACTER SET = utf8 COLLATE = utf8_general_ci COMMENT = '鞋类生产定检异常分析表' ROW_FORMAT = Dynamic;
+
+-- ----------------------------
+-- Records of shoe_qc_analysis
+-- ----------------------------
+INSERT INTO `shoe_qc_analysis` VALUES (1, '高胶', 463, '1.检查刷胶动作\n2.是否过胶线', '是否过胶线', '确定');
+INSERT INTO `shoe_qc_analysis` VALUES (2, '清洁度-后段', 149, '1.检查清洁人员是否清洁到位\n2.有没有自我检查', '是否清洁干净', '确定');
+INSERT INTO `shoe_qc_analysis` VALUES (3, '线头', 144, '1.检查有没有人剪线头\n2.是否有剪干净', '是否剪干净', '确定');
+INSERT INTO `shoe_qc_analysis` VALUES (4, '贴底鞋头、后跟歪', 102, '1.检查鞋头后跟套楦有没有套歪\n2.是否对准中心点', '是否套楦套正', '确定');
+INSERT INTO `shoe_qc_analysis` VALUES (5, '画线高低、大小', 83, '1.检查画线有没有放正\n2.是否画线有对点对线', '是否画线摆正一对一画', '确定');
+INSERT INTO `shoe_qc_analysis` VALUES (6, '脱胶', 215, '1.检查刷胶是否没有到位\n2.是否刷胶到位', '是否刷胶按照画线刷', '确定');
+INSERT INTO `shoe_qc_analysis` VALUES (7, '贴底（变形、长短不一、不平、卷边）', 58, '1.检查贴底有没有按照画线贴\n2.是否自我检查', '是否按照画线胶线贴', '确定');
+INSERT INTO `shoe_qc_analysis` VALUES (8, '鞋头大小、变形、花角', 36, '1.检查套楦后是否有花角，大小\n2.是否自我检查', '是否套楦按照楦头的中心点', '确定');
+INSERT INTO `shoe_qc_analysis` VALUES (9, '对应部件高低、大小', 13, '1.检查画线后左右脚是否一致\n2.是否自我检查', '是否按照画线左右要对比', '确定');
 
 SET FOREIGN_KEY_CHECKS = 1;

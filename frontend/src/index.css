@@ -97,78 +97,66 @@
 /* Layer directives must be outside @theme */
 @layer base {
   :root {
-    /* Gemini Light Mode Palette */
-    --background: 0 0% 100%;
-    --foreground: 0 0% 12%;
+    /* 核心调色盘：深沉且高级的 Zinc 系列 */ 
+    --background: 0 0% 100%; 
+    --foreground: 240 10% 3.9%; 
+    --card: 0 0% 100%; 
+    --card-foreground: 240 10% 3.9%; 
+    --popover: 0 0% 100%; 
+    --popover-foreground: 240 10% 3.9%; 
+    
+    /* 品牌色：降低饱和度，改为更有深度的靛蓝色 */ 
+    --primary: 240 5.9% 10%; 
+    --primary-foreground: 0 0% 98%; 
+    
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
 
-    --card: 213 27% 96%;
-    --card-foreground: 0 0% 12%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 12%;
-
-    /* Primary: #0B57D0 (Google Blue) */
-    --primary: 217 89% 43%;
-    --primary-foreground: 0 0% 100%;
-
-    /* Secondary: #D3E3FD (Light Blue) */
-    --secondary: 217 90% 91%;
-    --secondary-foreground: 217 89% 43%;
-
-    /* Muted: #E3E3E3 */
-    --muted: 0 0% 89%;
-    --muted-foreground: 0 0% 27%;
-
-    /* Accent: #C2E7FF */
-    --accent: 203 100% 88%;
-    --accent-foreground: 0 0% 12%;
-
+    --muted: 240 4.8% 95.9%; 
+    --muted-foreground: 240 3.8% 46.1%; 
+    
+    --accent: 240 4.8% 95.9%; 
+    --accent-foreground: 240 5.9% 10%; 
+    
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
 
-    /* Border: #E0E3E1 */
-    --border: 140 5% 88%;
-    --input: 140 5% 88%;
-    --ring: 217 89% 43%;
+    --border: 240 5.9% 90%; 
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
 
-    --radius: 1rem;
+    --radius: 0.75rem; 
+
+    /* 增加 AI 专属渐变色 */ 
+    --ai-glow: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%); 
   }
 
   .dark {
-    /* Gemini Dark Mode Palette */
-    --background: 240 4% 8%;
-    --foreground: 0 0% 89%;
+    --background: 240 10% 3.9%; 
+    --foreground: 0 0% 98%; 
+    --card: 240 10% 3.9%; 
+    --card-foreground: 0 0% 98%; 
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
 
-    --card: 210 3% 12%;
-    --card-foreground: 0 0% 89%;
+    --primary: 0 0% 98%; 
+    --primary-foreground: 240 5.9% 10%; 
+    
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
 
-    --popover: 210 3% 12%;
-    --popover-foreground: 0 0% 89%;
-
-    /* Primary: #A8C7FA (Google Light Blue) */
-    --primary: 217 90% 82%;
-    /* On Primary: #041E49 */
-    --primary-foreground: 218 90% 15%;
-
-    /* Secondary: #004A77 */
-    --secondary: 203 100% 23%;
-    --secondary-foreground: 203 100% 88%;
-
-    /* Muted: #444746 */
-    --muted: 210 3% 27%;
-    --muted-foreground: 0 0% 85%; /* 提升对比度，使其更易读 */
-
-    /* Accent: #444746 */
-    --accent: 210 3% 20%;
-    --accent-foreground: 0 0% 89%;
-
+    --muted: 240 3.7% 15.9%; 
+    --muted-foreground: 240 5% 64.9%; 
+    
+    --accent: 240 3.7% 15.9%; 
+    --accent-foreground: 0 0% 98%; 
+    
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
 
-    /* Border: #444746 */
-    --border: 210 3% 27%;
-    --input: 210 3% 27%;
-    --ring: 217 90% 82%;
+    --border: 240 3.7% 15.9%; 
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
   }
 
   * {
@@ -187,6 +175,29 @@
 
 /* Custom Scrollbar for Webkit */
 @layer utilities {
+  /* 增加高级感动画：呼吸光晕 */ 
+  .animate-pulse-glow { 
+    animation: pulse-glow 3s ease-in-out infinite; 
+  } 
+
+  @keyframes pulse-glow { 
+    0%, 100% { opacity: 0.5; transform: scale(1); filter: blur(10px); } 
+    50% { opacity: 0.8; transform: scale(1.1); filter: blur(15px); } 
+  } 
+  
+  /* 玻璃磨砂质感 */ 
+  .glass-effect { 
+    @apply bg-background/70 backdrop-blur-md border border-white/10; 
+  }
+
+  .glass-card {
+    @apply bg-white/70 dark:bg-zinc-950/70 backdrop-blur-xl border border-white/20 dark:border-white/10;
+  }
+
+  .ai-gradient-bg {
+    background: var(--ai-glow);
+  }
+
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;

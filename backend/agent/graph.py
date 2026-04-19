@@ -292,7 +292,8 @@ class ChatBIAgent:
         selected_examples = select_few_shot_examples(state["query"], max_examples=3, mode="sql")
         few_shot_examples_text = format_few_shot_examples(selected_examples)
 
-        structured_llm = self.llm.with_structured_output(GenerateSQLOutput)
+        # 确保结构化输出模式有足够的 token，防止截断导致解析 JSON 失败
+        structured_llm = self.llm.with_config({"max_tokens": 16384}).with_structured_output(GenerateSQLOutput)
         prompt_template = self.sql_gen_prompt
         chain = prompt_template | structured_llm
 
@@ -520,11 +521,11 @@ class ChatBIAgent:
 
         # 文本生成链（带标签以便流式输出时识别）
         # 注意：此处温度受用户数据库 llm_config 的 temperature 字段全局控制，避免强制覆盖破坏用户设定
-        text_llm = self.llm.with_config({"tags": ["report_generator"]})
+        text_llm = self.llm.with_config({"tags": ["report_generator"], "max_tokens": 16384})
         text_chain = self.response_gen_prompt | text_llm | StrOutputParser()
 
         # 图表生成链
-        chart_llm = self.llm.with_structured_output(EChartsConfig)
+        chart_llm = self.llm.with_config({"max_tokens": 16384}).with_structured_output(EChartsConfig)
         chart_chain = self.chart_gen_prompt | chart_llm
 
         selected_examples = select_few_shot_examples(state["query"], max_examples=2, mode="response")

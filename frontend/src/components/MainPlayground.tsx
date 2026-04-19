@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Share2, MoreVertical, PanelLeftClose, PanelLeftOpen, Loader2, Mic, Send, BarChart3, Database, TrendingUp, Package } from "lucide-react";
+import { Share2, MoreVertical, PanelLeftClose, PanelLeftOpen, Loader2, Mic, Send, BarChart3, TrendingUp } from "lucide-react";
 import { useOutletContext, useParams, useNavigate } from "react-router-dom";
 import { useChatSettingsStore } from "@/store/chat-settings-store";
 import { chatService } from "@/services/chat-service";
@@ -16,8 +16,7 @@ import { speechService } from "@/services/speech-service";
 const CONTAINER_CLASS = "w-full max-w-[min(95vw,1400px)] mx-auto transition-all duration-300 ease-in-out";
 
 export function MainPlayground() {
-    const { t } = useTranslation();
-    const currentYear = new Date().getFullYear(); // 动态获取当前年份
+    const { t } = useTranslation(); // 动态获取当前年份
     const {
         isLeftSidebarOpen,
         setIsLeftSidebarOpen,
@@ -78,13 +77,13 @@ export function MainPlayground() {
 
             mediaRecorder.onstop = async () => {
                 setIsListening(false);
-                stream.getTracks().forEach(track => track.stop()); // Clean up tracks
+                stream.getTracks().forEach(track => track.stop()); // 清理轨道
                 
                 if (audioChunksRef.current.length === 0) return;
 
                 const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' }); 
                 
-                // --- Conversion to 16kHz PCM using Web Worker to avoid blocking UI ---
+                // --- 转换为 16kHz PCM 格式，避免阻塞 UI ---
                 try {
                     toast.loading(t('chat.recognizing') || 'Recognizing speech...', { id: 'speech-recognition' });
                     
@@ -119,7 +118,7 @@ export function MainPlayground() {
 
                     worker.onmessage = async (e) => {
                         clearTimeout(timeoutId);
-                        worker.terminate(); // Clean up worker
+                        worker.terminate(); // 清理 worker线程
                         
                         if (e.data.success) {
                             const pcmBlob = e.data.blob;
@@ -150,7 +149,7 @@ export function MainPlayground() {
                         worker.terminate();
                     };
                     
-                    // Pass ArrayBuffer directly to avoid copying cost
+                    // 直接传递 ArrayBuffer，避免复制成本
                     worker.postMessage({ 
                         audioBuffer: channelData.buffer,
                         sampleRate: 16000
@@ -175,10 +174,10 @@ export function MainPlayground() {
             setIsLoadingHistory(true);
             const session = await chatService.getSession(id);
 
-            // Map backend messages to frontend format
+            // frontend 映射后端消息到前端格式
             const mappedMessages: Message[] = session.messages.map(msg => ({
                 id: msg.id,
-                role: msg.role === 'system' ? 'ai' : (msg.role as 'user' | 'ai'), // Treat system as AI for now or hide it
+                role: msg.role === 'system' ? 'ai' : (msg.role as 'user' | 'ai'), // 处理系统角色为 AI
                 content: msg.content,
                 thinking: msg.message_metadata?.thinking,
                 thinkingStatus: msg.message_metadata?.thinking ? 'completed' : undefined,
@@ -227,7 +226,7 @@ export function MainPlayground() {
         }
     }, []);
 
-    // Scroll on new message
+    // 新消息时滚动到底部
     useEffect(() => {
         if (messages.length > 0) {
             scrollToBottom(false);
@@ -235,7 +234,7 @@ export function MainPlayground() {
         }
     }, [messages.length, scrollToBottom]);
 
-    // Scroll on streaming updates
+    // 流式更新时滚动到底部
     useEffect(() => {
         if (isStreaming && shouldAutoScroll.current) {
             const frame = requestAnimationFrame(() => {
@@ -319,7 +318,7 @@ export function MainPlayground() {
 
                         if (event.type === 'thinking') {
                             msg.thinking = (msg.thinking || '') + event.content;
-                            // Only set to thinking if not already completed or error to prevent status reversion
+                            // 仅在尚未完成或出错时才设置为思考状态，防止状态回退
                             if (msg.thinkingStatus !== 'completed' && msg.thinkingStatus !== 'error') {
                                 msg.thinkingStatus = 'thinking';
                                 msg.status = t('chat.status.thinking');
@@ -338,7 +337,7 @@ export function MainPlayground() {
                             msg.status = event.content;
                         } else if (event.type === 'execution_result') {
                             msg.executionResult = event.content;
-                            msg.data = event.data; // Capture raw data for data preview
+                            msg.data = event.data; // 捕获原始数据用于数据预览
                             msg.status = t('chat.status.querying');
                         } else if (event.type === 'answer_chunk') {
                             msg.content = (msg.content || '') + event.content;
@@ -389,7 +388,7 @@ export function MainPlayground() {
                             msg.isLoading = false;
                             msg.status = undefined;
 
-                            // Ensure thinking stops when stream ends
+                            // 确保流结束时思考状态停止
                             if (msg.thinkingStatus === 'thinking') {
                                 msg.thinkingStatus = 'completed';
                             }
@@ -536,39 +535,36 @@ export function MainPlayground() {
                 ) : (
                     <>
                         {messages.length === 0 && (
-                            <div className={`flex flex-col items-center justify-center h-full ${CONTAINER_CLASS}`}>
-                                <div className="text-left w-full mb-10 animate-fade-in-up">
-                                    <h1 className="text-4xl md:text-5xl font-semibold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-purple-500 to-pink-500 mb-3">
-                                        {t('intro.title')}
-                                    </h1>
-                                    <p className="text-lg text-muted-foreground/60">
-                                        {t('intro.subtitle')}
-                                    </p>
-                                </div>
-
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 w-full animate-fade-in-up delay-100">
+                            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-2xl mx-auto space-y-8 animate-fade-in-up"> 
+                                <div className="space-y-4"> 
+                                    <h1 className="text-5xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-100 italic"> 
+                                        How can I help you <span className="text-transparent bg-clip-text ai-gradient-bg">analyze</span> today? 
+                                    </h1> 
+                                    <p className="text-zinc-500 text-lg"> 
+                                        连接您的 ERP 数据，通过自然语言即时生成财务报表与业务洞察。 
+                                    </p> 
+                                </div> 
+                                
+                                {/* 示例卡片：去背景，改为精细边框 */} 
+                                <div className="grid grid-cols-2 gap-4 w-full"> 
                                     {[
-                                        { key: 'sales', icon: TrendingUp, color: "from-blue-500/10 to-blue-600/5 hover:border-blue-300 dark:hover:border-blue-700" },
-                                        { key: 'customer', icon: BarChart3, color: "from-purple-500/10 to-purple-600/5 hover:border-purple-300 dark:hover:border-purple-700" },
-                                        { key: 'material', icon: Package, color: "from-emerald-500/10 to-emerald-600/5 hover:border-emerald-300 dark:hover:border-emerald-700" },
-                                        { key: 'inventory', icon: Database, color: "from-amber-500/10 to-amber-600/5 hover:border-amber-300 dark:hover:border-amber-700" }
-                                    ].map((item) => (
-                                        <button
+                                        { key: 'sales', icon: TrendingUp, label: '统计 2024 年销售额', desc: '按月度维度展示并生成趋势图' },
+                                        { key: 'inventory', icon: BarChart3, label: '分析当前库存', desc: '找出库存积压最多的 10 种物料' }
+                                    ].map(item => ( 
+                                        <button 
                                             key={item.key}
-                                            onClick={() => setInput(t(`intro.examples.${item.key}.desc`, { year: currentYear }))}
-                                            className={`flex flex-col gap-3 p-4 rounded-xl bg-gradient-to-br ${item.color} border border-border/50 transition-all text-left group hover:shadow-md hover:-translate-y-0.5 duration-200`}
-                                        >
-                                            <div className="p-2.5 bg-background/80 w-fit rounded-xl shadow-sm">
-                                                <item.icon size={18} className="text-primary" />
-                                            </div>
-                                            <div>
-                                                <p className="font-semibold text-foreground text-sm mb-0.5">{t(`intro.examples.${item.key}.label`)}</p>
-                                                <p className="text-xs text-muted-foreground leading-relaxed">{t(`intro.examples.${item.key}.desc`, { year: currentYear })}</p>
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
+                                            onClick={() => setInput(item.label + '，' + item.desc)}
+                                            className="p-4 text-left rounded-2xl border border-black/5 dark:border-white/5 bg-black/[0.02] dark:bg-white/[0.02] hover:bg-black/[0.05] dark:hover:bg-white/[0.05] transition-all group"
+                                        > 
+                                            <div className="h-8 w-8 rounded-lg bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center mb-3 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors"> 
+                                                <item.icon size={18} /> 
+                                            </div> 
+                                            <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-200">{item.label}</div> 
+                                            <div className="text-xs text-zinc-500 mt-1">{item.desc}</div> 
+                                        </button> 
+                                    ))} 
+                                </div> 
+                            </div> 
                         )}
 
                         {messages.map((msg) => (
@@ -579,24 +575,24 @@ export function MainPlayground() {
                 )}
             </div>
 
-            <div className={`flex-shrink-0 p-4 bg-background z-20 ${CONTAINER_CLASS}`}>
-                <div className="relative flex items-end gap-2 bg-muted/50 hover:bg-muted/80 focus-within:bg-muted transition-colors rounded-[28px] p-2 pl-4 border border-transparent focus-within:border-border/50 focus-within:shadow-md ring-offset-2 focus-within:ring-2 ring-primary/10">
+            <div className={`flex-shrink-0 p-4 z-20 ${CONTAINER_CLASS} bg-transparent`}>
+                <div className="relative flex items-end gap-2 glass-card rounded-[32px] p-2 pl-4 transition-all shadow-2xl dark:shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)] focus-within:ring-2 ring-indigo-500/20 border border-black/5 dark:border-white/10">
                     <textarea
                         ref={textareaRef}
                         value={input}
                         onChange={handleInput}
                         onKeyDown={handleKeyDown}
-                        placeholder={t('chat.inputPlaceholder')}
-                        className="w-full py-3 bg-transparent border-none focus:outline-none focus:ring-0 resize-none min-h-[48px] max-h-[200px] text-base text-foreground placeholder:text-muted-foreground/70"
+                        placeholder="询问关于库存、订单或财务的问题..."
+                        className="w-full py-4 bg-transparent border-none focus:outline-none focus:ring-0 resize-none min-h-[56px] max-h-[200px] text-[15px] text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-600"
                         rows={1}
                         aria-label="Chat input"
                     />
 
-                    <div className="flex items-center gap-1 pb-1.5 pr-2">
+                    <div className="flex items-center gap-1 pb-2 pr-2">
                         {!input.trim() && (
                             <>
                                 <button 
-                                    className={`p-2 rounded-full transition-all ${isListening ? 'text-red-500 bg-red-100 dark:bg-red-900/30 animate-pulse' : 'text-muted-foreground hover:text-primary hover:bg-background'}`}
+                                    className={`p-2 rounded-full transition-all ${isListening ? 'text-red-500 bg-red-100 dark:bg-red-900/30 animate-pulse' : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/5'}`}
                                     aria-label={t('chat.voiceInput', 'Voice input')}
                                     title={t('chat.voiceInput', 'Voice input')}
                                     onClick={toggleListening}
@@ -612,7 +608,7 @@ export function MainPlayground() {
                                 disabled={isStreaming}
                                 aria-label={t('chat.sendMessage', 'Send message')}
                                 title={t('chat.sendMessage', 'Send message')}
-                                className="p-2 bg-primary text-primary-foreground rounded-full shadow-md hover:shadow-lg transition-all hover:scale-105 active:scale-95 flex items-center justify-center w-10 h-10"
+                                className="h-12 w-12 rounded-full ai-gradient-bg text-white flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-lg shadow-indigo-500/20"
                             >
                                 {isStreaming ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} className="ml-0.5" />}
                             </button>
@@ -621,7 +617,7 @@ export function MainPlayground() {
                                 disabled
                                 aria-label={t('chat.sendMessage', 'Send message')}
                                 title={t('chat.sendMessage', 'Send message')}
-                                className="p-2 text-muted-foreground/60 cursor-not-allowed rounded-full w-10 h-10 flex items-center justify-center"
+                                className="h-12 w-12 text-zinc-400 dark:text-zinc-600 cursor-not-allowed rounded-full flex items-center justify-center bg-black/5 dark:bg-white/5"
                             >
                                 <Send size={18} className="ml-0.5" />
                             </button>
@@ -629,8 +625,8 @@ export function MainPlayground() {
                     </div>
                 </div>
                 <div className="mt-3 text-center">
-                    <p className="text-[11px] text-muted-foreground/70">
-                        {t('chat.footer')}
+                    <p className="text-[10px] text-zinc-500 dark:text-zinc-600 tracking-wide">
+                        Powered by KY Data Pilot Neural Engine · Enterprise Security Guaranteed
                     </p>
                 </div>
             </div>

@@ -2,8 +2,67 @@ import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { Maximize2, Minimize2, Download, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useThemeStore } from '@/store/theme-store'; // 引入主题 Store
 import type { ChartOption } from '@/types/api';
+import * as echarts from 'echarts';
+
+// 定义一个高级感主题对象 
+export const HIGH_END_THEME = { 
+    "color": [ 
+        "#6366f1", // Indigo 
+        "#10b981", // Emerald 
+        "#f59e0b", // Amber 
+        "#ef4444", // Rose 
+        "#8b5cf6", // Violet 
+        "#06b6d4"  // Cyan 
+    ], 
+    "backgroundColor": "transparent", 
+    "textStyle": { 
+        "fontFamily": "Inter, system-ui, sans-serif", 
+        "color": "#71717a" 
+    }, 
+    "grid": { 
+        "left": "3%", 
+        "right": "4%", 
+        "bottom": "3%", 
+        "top": "15%", 
+        "containLabel": true 
+    }, 
+    "categoryAxis": { 
+        "axisLine": { "lineStyle": { "color": "rgba(255,255,255,0.05)" } }, 
+        "axisTick": { "show": false }, 
+        "axisLabel": { "color": "#71717a", "fontSize": 11 }, 
+        "splitLine": { "show": false } 
+    }, 
+    "valueAxis": { 
+        "axisLine": { "show": false }, 
+        "axisTick": { "show": false }, 
+        "axisLabel": { "color": "#71717a", "fontSize": 11 }, 
+        "splitLine": { "lineStyle": { "color": "rgba(255,255,255,0.05)", "type": "dashed" } } 
+    }, 
+    "tooltip": { 
+        "backgroundColor": "rgba(24, 24, 27, 0.8)", 
+        "backdropFilter": "blur(8px)", 
+        "borderColor": "rgba(255, 255, 255, 0.1)", 
+        "textStyle": { "color": "#f4f4f5", "fontSize": 12 }, 
+        "borderRadius": 8, 
+        "borderWidth": 1, 
+        "shadowBlur": 20, 
+        "shadowColor": "rgba(0,0,0,0.5)" 
+    }, 
+    "line": { 
+        "smooth": true, 
+        "symbol": "circle", 
+        "symbolSize": 6, 
+        "lineStyle": { "width": 3 } 
+    }, 
+    "bar": { 
+        "itemStyle": { "borderRadius": [4, 4, 0, 0] }, 
+        "barWidth": "40%" 
+    } 
+};
+
+// 注册主题
+echarts.registerTheme('zinc', HIGH_END_THEME);
 
 interface ChartRendererProps {
   option: ChartOption | unknown;
@@ -15,17 +74,6 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
   const chartRef = useRef<ReactECharts>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // 获取当前主题
-  const { theme } = useThemeStore();
-  
-  // 计算实际传给 ECharts 的主题（处理 system 逻辑）
-  const actualTheme = useMemo(() => {
-    if (theme === 'system') {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    }
-    return theme;
-  }, [theme]);
 
   // 严格验证图表配置，防止 ECharts 内部抛出异常导致白屏
   const validatedOption = useMemo(() => {
@@ -189,7 +237,7 @@ export function ChartRenderer({ option, height = '100%' }: ChartRendererProps) {
       <ReactECharts
         ref={chartRef}
         option={mergedOption}
-        theme={actualTheme} // 👈 关键：直接传入 'dark' 或 'light'
+        theme="zinc" // 👈 关键：应用 Zinc 高级感主题
         style={{ height: isFullscreen ? 'calc(100vh - 4rem)' : height, width: '100%' }}
         opts={{ renderer: 'canvas' }}
         notMerge={true}

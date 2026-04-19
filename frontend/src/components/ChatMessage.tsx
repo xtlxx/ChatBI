@@ -7,6 +7,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import * as Dialog from '@radix-ui/react-dialog';
+import { motion } from 'framer-motion';
 
 // 引入成熟的语法高亮库
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -21,6 +22,7 @@ import { cleanMarkdownContent } from '@/lib/utils';
 import type { Message } from '@/types/chat';
 import { useSmoothStream } from '@/hooks/useSmoothStream';
 
+// Lazy load ChartRenderer component
 const ChartRenderer = lazy(() => import('@/components/ChartRenderer').then(module => ({ default: module.ChartRenderer })));
 
 const MemoizedMarkdown = memo(({ content, components }: { content: string, components: Components }) => (
@@ -211,20 +213,29 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
     }), [isDark, t]);
 
     return (
-        <div className={`flex gap-3 md:gap-4 group ${containerClass || ''} ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+        <motion.div 
+            initial={{ opacity: 0, y: 10 }} 
+            animate={{ opacity: 1, y: 0 }} 
+            transition={{ duration: 0.4, ease: "easeOut" }} 
+            className={`flex gap-3 md:gap-4 group ${containerClass || ''} ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+        >
 
+            {/* AI 头像：使用渐变背景 */} 
             {msg.role === 'ai' && (
                 <div className="flex-shrink-0 mt-1">
-                    <div className={`w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-blue-500/20 ${msg.isLoading ? 'animate-[spin_3s_linear_infinite]' : ''}`}>
-                        <Sparkles size={14} className="text-white" />
+                    <div 
+                        className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg transform group-hover:scale-110 transition-transform"
+                        style={{ background: 'var(--ai-glow)' }}
+                    >
+                        <Sparkles size={18} className="text-white" />
                     </div>
                 </div>
             )}
 
             <div className={`flex flex-col ${msg.role === 'user' ? 'max-w-[85%] md:max-w-[70%] items-end' : 'max-w-full flex-1 items-start'}`}>
-                <div className={`text-base leading-7 rounded-2xl shadow-sm ${msg.role === 'user'
-                    ? 'bg-blue-50 dark:bg-blue-900/20 text-foreground px-6 py-4 rounded-br-sm border border-blue-100 dark:border-blue-800/50'
-                    : 'bg-transparent text-foreground w-full'
+                <div className={`text-base leading-7 rounded-2xl ${msg.role === 'user'
+                    ? 'bg-primary text-primary-foreground px-6 py-4 shadow-md rounded-br-sm'
+                    : 'bg-transparent text-foreground w-full border-none'
                     }`}>
                     {/* === 思考状态 === */}
                     {msg.role === 'ai' && (msg.thinking || msg.sqlThought) && (
@@ -472,7 +483,7 @@ export const ChatMessage = memo(({ message: msg, containerClass }: ChatMessagePr
                     </div>
                 )}
             </div>
-        </div>
+        </motion.div>
     );
 });
 

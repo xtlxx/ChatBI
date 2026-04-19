@@ -87,12 +87,12 @@ def _enforce_required_table_filters(expression: exp.Expression, dialect: str) ->
             tables.add(t.name)
 
     present: set[tuple[str, str]] = set()
-    where_expr = expression.args.get("where")
-    if isinstance(where_expr, exp.Where):
-        present |= _extract_eq_predicates(where_expr)
-    elif isinstance(where_expr, exp.Expression):
+    
+    # 查找所有的 WHERE 子句（包括子查询中的）
+    for where_expr in expression.find_all(exp.Where):
         present |= _extract_eq_predicates(where_expr)
 
+    # 查找所有的 JOIN ON 子句
     for j in expression.find_all(exp.Join):
         on_expr = j.args.get("on")
         if isinstance(on_expr, exp.Expression):
@@ -117,11 +117,14 @@ def _enforce_required_table_filters(expression: exp.Expression, dialect: str) ->
 
         for col, lit in required:
             if (col, lit) not in present:
-                missing.append(f"{table_name}: {rule}")
+                missing.append(f"- {table_name}: 必须包含 `{rule}`")
                 break
 
     if missing:
-        raise ValueError("缺少必选软删除/可用性过滤条件（每张表都必须包含）：\n" + "\n".join(missing))
+        raise ValueError(
+            "缺少或写错了必选过滤条件！请严格原样复制以下条件（绝不要修改值，例如 0 就是可用，绝不要擅自改成 1）：\n"
+            + "\n".join(missing)
+        )
 
 
 def validate_and_format_sql(sql: str, dialect: str = "postgres") -> str:
@@ -239,12 +242,23 @@ def validate_sql_integrity(query: str) -> str | None:
         else:
             return f"验证错误：表 '{table_name}' 不存在于数据库中。"
 
+    # 收集所有的列别名，以防在大模型使用 GROUP BY 或 ORDER BY 时引用它们
+    column_aliases = set()
+    for select_node in parsed.find_all(exp.Select):
+        for projection in select_node.expressions:
+            if isinstance(projection, exp.Alias):
+                column_aliases.add(projection.alias.lower())
+
     for node in parsed.find_all(exp.Column):
         col_name = node.name
         table_alias = node.table
         
         # 跳过函数调用内的星号，如 COUNT(*)
         if col_name == "*":
+            continue
+            
+        # 如果这个列名实际上是前面 SELECT 投影定义的别名（常见于 GROUP BY / ORDER BY），则跳过验证
+        if not table_alias and col_name.lower() in column_aliases:
             continue
             
         if table_alias:

@@ -111,68 +111,73 @@ export function Sidebar({ view, onViewChange }: SidebarProps) {
   const displayedSessions = isHistoryExpanded ? sessions : sessions.slice(0, 5);
 
   return (
-    <aside className="w-full h-full flex flex-col bg-background/50 backdrop-blur-sm border-r border-border">
-      {/* Top Header */}
-      <div className="h-16 px-4 flex items-center gap-3">
-        <span className="font-semibold text-xl tracking-tight text-foreground/90">
-          KY Data Pilot
-        </span>
-      </div>
+    <aside className="w-full h-full flex flex-col bg-zinc-50 dark:bg-zinc-950 text-zinc-500 dark:text-zinc-400 border-r border-black/5 dark:border-white/5 transition-colors">
+      {/* Header: 极简主义 */} 
+      <div className="h-16 px-6 flex items-center"> 
+        <div className="flex items-center gap-2 font-bold text-zinc-900 dark:text-zinc-100 tracking-tight"> 
+          <div className="w-6 h-6 ai-gradient-bg rounded-lg shadow-sm" /> {/* 统一品牌标识 */} 
+          <span>KY Data Pilot</span> 
+        </div> 
+      </div> 
 
-      {/* Navigation */}
-      <div className="flex-1 overflow-y-auto px-3 space-y-1 custom-scrollbar">
-        <button
-          onClick={handleNewChat}
-          className="flex items-center gap-3 w-full mt-2 px-4 py-3 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-full shadow-md hover:shadow-lg transition-all duration-200 mb-6 group"
-        >
-          <Plus size={18} className="group-hover:rotate-90 transition-transform duration-200" />
-          <span>{t('sidebar.newChat')}</span>
-        </button>
+      {/* 导航区域 */}
+      <div className="flex-1 overflow-y-auto px-3 space-y-6 pt-4 custom-scrollbar">
+        {/* New Chat: 玻璃拟态按钮 */} 
+        <button 
+          onClick={handleNewChat} 
+          className="flex items-center justify-between w-full px-4 py-2.5 text-sm font-medium text-zinc-900 dark:text-zinc-100 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 border border-black/5 dark:border-white/10 rounded-xl transition-all group" 
+        > 
+          <div className="flex items-center gap-2"> 
+            <Plus size={16} /> 
+            <span>{t('sidebar.newChat')}</span> 
+          </div> 
+          <kbd className="hidden group-hover:block text-[10px] bg-black/10 dark:bg-white/10 px-1.5 py-0.5 rounded opacity-50 text-zinc-600 dark:text-zinc-300">⌘ N</kbd> 
+        </button> 
 
-        <div className="px-2 pb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          {t('sidebar.recent')}
-        </div>
-
-        <div className="space-y-0.5">
+        {/* 最近会话：精细化的列表态 */} 
+        <div className="space-y-1"> 
+          <div className="px-3 mb-2 text-[10px] font-bold text-zinc-400 dark:text-zinc-600 uppercase tracking-widest"> 
+            {t('sidebar.recent')} 
+          </div> 
+          
           {isLoading && sessions.length === 0 ? (
-            <div className="flex items-center justify-center py-8 text-muted-foreground">
+            <div className="flex items-center justify-center py-8 text-zinc-500 dark:text-zinc-600">
               <Loader2 className="animate-spin mr-2" size={16} />
               <span>Loading...</span>
             </div>
           ) : (
             <>
               {displayedSessions.map((session) => (
-                <div key={session.id} className="relative group">
-                  <button
-                    onClick={() => handleSessionClick(session.id)}
-                    className={`
-                              flex items-center gap-3 w-full px-3 py-2 text-sm text-left rounded-lg transition-colors pr-10
-                              ${currentSessionId === session.id
-                        ? "bg-accent text-accent-foreground font-medium"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground"}
-                          `}
-                  >
-                    <MessageSquare size={16} className="shrink-0 opacity-70" />
-                    <span className="truncate flex-1">{session.title || t('chat.newChat')}</span>
-                  </button>
+                <div key={session.id} className="relative group px-1"> 
+                  <button 
+                    onClick={() => handleSessionClick(session.id)} 
+                    className={` 
+                      flex items-center gap-3 w-full px-3 py-2 text-sm rounded-lg transition-all 
+                      ${currentSessionId === session.id 
+                        ? "bg-black/5 dark:bg-white/10 text-zinc-900 dark:text-white shadow-sm ring-1 ring-black/5 dark:ring-white/10" 
+                        : "hover:bg-black/5 dark:hover:bg-white/5 hover:text-zinc-800 dark:hover:text-zinc-200"} 
+                    `} 
+                  > 
+                    <MessageSquare size={14} className={currentSessionId === session.id ? "text-indigo-500 dark:text-indigo-400" : "opacity-50 dark:opacity-40"} /> 
+                    <span className="truncate flex-1 text-left">{session.title || t('chat.newChat')}</span> 
+                  </button> 
                   <button
                     onClick={(e) => handleDeleteSession(e, session.id)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md opacity-0 group-hover:opacity-100 transition-all duration-200"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-zinc-400 dark:text-zinc-500 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-400/10 rounded-md opacity-0 group-hover:opacity-100 transition-all duration-200"
                     title={t('common.delete') || '删除'}
                   >
                     <Trash2 size={14} />
                   </button>
-                </div>
-              ))}
+                </div> 
+              ))} 
 
-              {/* View All / Show Less Button */}
+              {/* 查看所有/显示更少按钮：玻璃拟态 */}
               {sessions.length > 5 && (
                 <button
                   onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
-                  className="group flex items-center gap-3 w-full px-3 py-2 text-sm text-left rounded-lg transition-colors text-muted-foreground hover:bg-muted hover:text-foreground mt-2"
+                  className="group flex items-center gap-3 w-full px-4 py-2 text-sm text-left rounded-lg transition-colors text-zinc-500 hover:bg-black/5 dark:hover:bg-white/5 hover:text-zinc-700 dark:hover:text-zinc-300 mt-2"
                 >
-                  {/* Show proper icon and text based on state, though standard AI studio just links to all. We toggle here for MVP UX */}
-                  <ArrowRight size={16} className={`shrink-0 opacity-70 transition-transform duration-200 ${isHistoryExpanded ? 'rotate-90' : ''}`} />
+                  <ArrowRight size={14} className={`shrink-0 opacity-70 transition-transform duration-200 ${isHistoryExpanded ? 'rotate-90' : ''}`} />
                   <span className="truncate flex-1 font-medium">
                     {isHistoryExpanded ? t('common.close') : t('sidebar.viewAllHistory')}
                   </span>
@@ -183,20 +188,17 @@ export function Sidebar({ view, onViewChange }: SidebarProps) {
         </div>
       </div>
 
-      {/* Bottom Actions - Google AI Studio Style */}
-      <div className="mt-auto px-2 py-3 border-t border-border space-y-1">
-        {/* Settings Button */}
-        <button
+      {/* 底部用户信息：悬浮卡片感 */} 
+      <div className="p-4 mt-auto border-t border-black/5 dark:border-white/5 space-y-2"> 
+        <button 
           ref={settingsButtonRef}
-          onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-          aria-expanded={isSettingsOpen}
-          aria-controls="settings-popover"
-          className={`flex items-center gap-3 w-full px-3 py-2 text-sm font-medium rounded-lg transition-colors ${isSettingsOpen ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
-        >
-          <Settings size={18} className="shrink-0" />
-          <span className="truncate">{t('sidebar.settings')}</span>
-        </button>
-
+          onClick={() => setIsSettingsOpen(!isSettingsOpen)} 
+          className="flex items-center gap-3 w-full px-3 py-2 text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg transition-colors" 
+        > 
+          <Settings size={16} className="opacity-60" /> 
+          <span>{t('sidebar.settings')}</span> 
+        </button> 
+        
         <SettingsPopover
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen(false)}
@@ -206,18 +208,18 @@ export function Sidebar({ view, onViewChange }: SidebarProps) {
           <SidebarSettings />
         </SettingsPopover>
 
-        {/* User Profile - Clean Row Style */}
-        {userProfile && (
-          <div className="flex items-center gap-3 w-full px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground rounded-lg transition-colors cursor-pointer group">
-            <div className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center text-primary text-xs font-bold shrink-0">
-              {userProfile.name?.charAt(0) || <User size={12} />}
-            </div>
-            <div className="truncate flex-1 group-hover:text-foreground transition-colors">
-              {userProfile.name}
-            </div>
-          </div>
-        )}
-      </div>
+        {userProfile && ( 
+          <div className="flex items-center gap-3 px-3 py-3 bg-white dark:bg-white/5 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm dark:shadow-none"> 
+             <div className="w-8 h-8 rounded-full ai-gradient-bg flex items-center justify-center text-[10px] font-bold text-white shadow-inner"> 
+                {userProfile.name?.charAt(0) || <User size={12} />} 
+             </div> 
+             <div className="flex-1 min-w-0"> 
+                <p className="text-sm font-medium text-zinc-900 dark:text-zinc-200 truncate">{userProfile.name}</p> 
+                <p className="text-[10px] text-zinc-500 truncate">Enterprise Pro</p> 
+             </div> 
+          </div> 
+        )} 
+      </div> 
     </aside>
   );
 }

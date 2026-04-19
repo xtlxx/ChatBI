@@ -1,73 +1,63 @@
 import { useState } from 'react';
-import { ChevronDown, Code as CodeIcon, Copy, Check } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { useTranslation } from 'react-i18next';
+import { Copy, Check, Terminal } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus, vs } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { useThemeStore } from '@/store/theme-store';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
-interface SqlBlockProps {
-  sql: string;
-}
+export const SqlBlock = ({ sql }: { sql: string }) => {
+    const [copied, setCopied] = useState(false);
 
-export function SqlBlock({ sql }: SqlBlockProps) {
-  const { t } = useTranslation();
-  const [isOpen, setIsOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const { theme } = useThemeStore();
+    const handleCopy = () => {
+        navigator.clipboard.writeText(sql);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
 
-  const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    return (
+        <div className="my-6 overflow-hidden rounded-xl border border-white/5 bg-[#0d0d0d] shadow-2xl">
+            {/* Header: 仿 IDE 标签栏 */} 
+            <div className="flex items-center justify-between bg-white/[0.03] px-4 py-2.5"> 
+                <div className="flex items-center gap-2.5"> 
+                    <div className="flex gap-1.5"> 
+                        <div className="h-3 w-3 rounded-full bg-red-500/20 border border-red-500/30" /> 
+                        <div className="h-3 w-3 rounded-full bg-amber-500/20 border border-amber-500/30" /> 
+                        <div className="h-3 w-3 rounded-full bg-emerald-500/20 border border-emerald-500/30" /> 
+                    </div> 
+                    <div className="h-4 w-px bg-white/10 mx-1" /> 
+                    <div className="flex items-center gap-2 text-[11px] font-medium text-zinc-400 tracking-wider uppercase"> 
+                        <Terminal size={12} className="text-indigo-400" /> 
+                        PostgreSQL Query 
+                    </div> 
+                </div> 
+                <button 
+                    onClick={handleCopy} 
+                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-zinc-500 hover:bg-white/5 hover:text-zinc-200 transition-all" 
+                > 
+                    {copied ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} />} 
+                    <span className="text-[10px]">{copied ? 'Copied' : 'Copy'}</span> 
+                </button> 
+            </div> 
 
-  const toggle = () => setIsOpen(!isOpen);
-
-  const copyToClipboard = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(sql);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div className="mt-4 border border-border rounded-xl overflow-hidden bg-card shadow-sm">
-      <div
-        onClick={toggle}
-        className="bg-muted/50 px-4 py-2.5 text-xs font-mono text-muted-foreground border-b border-border flex justify-between items-center cursor-pointer hover:bg-muted/70 transition-colors"
-      >
-        <div className="flex items-center gap-2 select-none">
-          <CodeIcon size={14} className="text-blue-500" />
-          <span className="font-medium">{t('sqlBlock.title')}</span>
-          <div className={`transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>
-            <ChevronDown size={14} />
-          </div>
+            {/* SQL Content */} 
+            <div className="relative group"> 
+                <SyntaxHighlighter 
+                    language="sql" 
+                    style={vscDarkPlus} 
+                    customStyle={{ 
+                        margin: 0, 
+                        padding: '1.5rem', 
+                        fontSize: '13px', 
+                        lineHeight: '1.6', 
+                        background: 'transparent', 
+                    }} 
+                > 
+                    {sql} 
+                </SyntaxHighlighter> 
+                
+                {/* 装饰物：右下角水印 */} 
+                <div className="absolute bottom-2 right-4 text-[10px] text-white/5 font-mono select-none pointer-events-none"> 
+                    NEURAL_SQL_V2 
+                </div> 
+            </div> 
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] opacity-50 hidden sm:inline">
-            {sql.split('\n').length} {t('sqlBlock.lines')}
-          </span>
-          <button
-            onClick={copyToClipboard}
-            className="hover:text-primary transition-colors flex items-center gap-1 z-10 px-2 py-1 rounded-md hover:bg-background"
-          >
-            {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-            <span className="hidden sm:inline">{copied ? t('sqlBlock.copied') : t('sqlBlock.copy')}</span>
-          </button>
-        </div>
-      </div>
-      <div
-        className={cn(
-          "transition-all duration-300 ease-in-out overflow-hidden",
-          isOpen ? "max-h-[2000px] opacity-100" : "max-h-0 opacity-0"
-        )}
-      >
-        <SyntaxHighlighter
-            PreTag="div"
-            children={sql}
-            language="sql"
-            style={isDark ? vscDarkPlus : vs}
-            customStyle={{ margin: 0, padding: '1rem', fontSize: '0.75rem', backgroundColor: 'transparent', lineHeight: 1.6 }}
-        />
-      </div>
-
-    </div>
-  );
-}
+    );
+};

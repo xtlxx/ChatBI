@@ -29,7 +29,7 @@ class PromptManager:
             if cached_prompt and cached_prompt.strip():
                 return cached_prompt
         except Exception as e:
-            logger.warning(f"Failed to read prompt from cache: {e}")
+            logger.warning(f"从缓存读取提示失败: {e}")
 
         # 2. 缓存未命中，查库
         try:
@@ -50,22 +50,22 @@ class PromptManager:
                     new_prompt = SystemPrompt(
                         prompt_key=prompt_key,
                         content=content,
-                        description=f"Auto-generated for {prompt_key}"
+                        description=f"自动生成的默认提示：{prompt_key}"
                     )
                     db_session.add(new_prompt)
                 
                 await db_session.commit()
-                logger.info(f"Initialized/Updated default prompt for {prompt_key}")
-
+                logger.info(f"已初始化/更新默认提示：{prompt_key}")
+            
             # 3. 写入缓存 (TTL 可设置长一些，比如 24 小时，修改时主动清除)
             try:
                 await RedisCache.set(cache_key, content, ttl=86400)
             except Exception as e:
-                logger.warning(f"Failed to cache prompt: {e}")
+                logger.warning(f"缓存提示失败: {e}")
 
             return content
         except Exception as e:
-            logger.error(f"Error fetching prompt {prompt_key} from db: {e}")
+            logger.error(f"查询数据库获取提示 {prompt_key} 失败: {e}")
             return default_content
 
     @classmethod

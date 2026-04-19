@@ -73,6 +73,7 @@ async def agent_context(
                 api_key=api_key,
                 temperature=temperature,
                 streaming=True,
+                max_tokens=16384,
             )
         else:
             # OpenAI 兼容
@@ -81,6 +82,7 @@ async def agent_context(
                 "api_key": api_key,
                 "temperature": temperature,
                 "streaming": True,
+                "max_tokens": 16384,
             }
             
             # 智能推断 Base URL
