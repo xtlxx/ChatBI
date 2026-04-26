@@ -91057,59 +91057,120 @@
       ],
       "indexes": []
     },
-    "shoe_qc_analysis": {
-      "name": "shoe_qc_analysis",
-      "comment": "鞋类生产定检异常分析表",
+    "shoe_qc_daily_report": {
+      "name": "shoe_qc_daily_report",
+      "comment": "鞋类生产定检流水表",
       "columns": [
         {
           "name": "id",
-          "type": "int(11)",
-          "nullable": false,
+          "type": "INT",
+          "nullable": true,
           "default": null,
-          "comment": null
+          "comment": "流水号ID"
+        },
+        {
+          "name": "group_name",
+          "type": "VARCHAR(255)",
+          "nullable": true,
+          "default": null,
+          "comment": "组别，如二厂成型1课"
+        },
+        {
+          "name": "inspection_date",
+          "type": "VARCHAR(50)",
+          "nullable": true,
+          "default": null,
+          "comment": "日期，如2026/4/18"
+        },
+        {
+          "name": "shoe_model",
+          "type": "VARCHAR(255)",
+          "nullable": true,
+          "default": null,
+          "comment": "型体，鞋款型号"
+        },
+        {
+          "name": "production_volume",
+          "type": "INT",
+          "nullable": true,
+          "default": null,
+          "comment": "该批次总产量"
         },
         {
           "name": "defect_reason",
-          "type": "varchar(255) CHARACTER SET utf8 COLLATE utf8_general_ci",
+          "type": "VARCHAR(255)",
           "nullable": true,
-          "default": "NULL",
-          "comment": "定检原因"
+          "default": null,
+          "comment": "定检原因/问题点，如脱胶、线头等"
         },
         {
           "name": "pair_count",
-          "type": "int(11)",
+          "type": "INT",
           "nullable": true,
-          "default": "NULL",
-          "comment": "双数"
+          "default": null,
+          "comment": "异常/不良双数"
         },
         {
           "name": "inspection_method",
-          "type": "text CHARACTER SET utf8 COLLATE utf8_general_ci",
+          "type": "TEXT",
           "nullable": true,
           "default": null,
           "comment": "巡检处理方法"
         },
         {
           "name": "improvement_method",
-          "type": "text CHARACTER SET utf8 COLLATE utf8_general_ci",
+          "type": "TEXT",
           "nullable": true,
           "default": null,
           "comment": "现场改善方法"
         },
         {
           "name": "is_confirmed",
-          "type": "varchar(50) CHARACTER SET utf8 COLLATE utf8_general_ci",
+          "type": "VARCHAR(50)",
           "nullable": true,
-          "default": "NULL",
+          "default": null,
           "comment": "确定否"
+        },
+        {
+          "name": "image_data",
+          "type": "MEDIUMBLOB",
+          "nullable": true,
+          "default": null,
+          "comment": "问题图片Base64或二进制数据"
+        },
+        {
+          "name": "create_time",
+          "type": "DATETIME",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP",
+          "comment": "创建时间"
+        },
+        {
+          "name": "create_by",
+          "type": "VARCHAR(64)",
+          "nullable": true,
+          "default": null,
+          "comment": "创建人"
+        },
+        {
+          "name": "update_time",
+          "type": "DATETIME",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+          "comment": "更新时间"
+        },
+        {
+          "name": "update_by",
+          "type": "VARCHAR(64)",
+          "nullable": true,
+          "default": null,
+          "comment": "更新人"
         }
       ],
       "constraints": [
         {
           "type": "PRIMARY KEY",
-          "columns": [
-            "id"
-          ]
+          "columns": []
         }
       ],
       "indexes": []
